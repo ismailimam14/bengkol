@@ -31,10 +31,12 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Ensure OpenAPI YAML is Up to Date
+      - name: Ensure OpenAPI YAML and .nojekyll are Up to Date
         run: |
           mkdir -p docs
           cp -f backend/docs/openapi.yaml docs/openapi.yaml
+          cp -f backend/docs/openapi.yaml openapi.yaml
+          touch .nojekyll docs/.nojekyll
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v4

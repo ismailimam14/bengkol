@@ -1,0 +1,2294 @@
+openapi: 3.0.3
+info:
+  title: Bengkol Workshop & Repair-Shop Management API
+  description: |
+    Production-ready REST API for the Bengkol auto repair-shop platform.
+    Connects vehicle owners with nearby repair shops for slot booking, real-time queues, service catalogs, inventory, and reviews.
+  version: 1.0.0
+  contact:
+    name: Bengkol Engineering
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://api.bengkol.com
+    description: Production server
+
+paths:
+  /health:
+    get:
+      summary: Liveness health check
+      tags:
+        - Observability
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /ready:
+    get:
+      summary: Readiness health check
+      tags:
+        - Observability
+      responses:
+        '200':
+          description: Service and downstream dependencies are healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '503':
+          description: Downstream dependency is failing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/ping:
+    get:
+      summary: API v1 status ping
+      tags:
+        - System
+      responses:
+        '200':
+          description: API is operational
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/auth/register:
+    post:
+      summary: Register user
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: User registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /api/v1/auth/login:
+    post:
+      summary: Authenticate user
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Successfully authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /api/v1/auth/refresh:
+    post:
+      summary: Refresh access token
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Tokens refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+
+  /api/v1/auth/logout:
+    post:
+      summary: Logout user
+      tags:
+        - Authentication
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: Successfully logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/me:
+    get:
+      summary: Get authenticated user profile
+      tags:
+        - User
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+
+  /api/v1/workshops:
+    get:
+      summary: List workshops
+      tags:
+        - Workshops
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of workshops
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkshopListResponse'
+    post:
+      summary: Create a new workshop
+      tags:
+        - Workshops
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkshopRequest'
+      responses:
+        '201':
+          description: Workshop created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkshopDetailResponse'
+
+  /api/v1/workshops/nearby:
+    get:
+      summary: Find nearby workshops via PostGIS spatial search
+      tags:
+        - Workshops
+      parameters:
+        - in: query
+          name: lat
+          required: true
+          schema:
+            type: number
+            format: double
+        - in: query
+          name: lng
+          required: true
+          schema:
+            type: number
+            format: double
+        - in: query
+          name: radius
+          schema:
+            type: number
+            format: double
+      responses:
+        '200':
+          description: Nearby workshops ordered by distance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NearbyWorkshopsResponse'
+
+  /api/v1/workshops/{id}:
+    get:
+      summary: Get workshop detail
+      tags:
+        - Workshops
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Workshop details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkshopDetailResponse'
+    patch:
+      summary: Update workshop profile
+      tags:
+        - Workshops
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkshopRequest'
+      responses:
+        '200':
+          description: Updated workshop details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkshopDetailResponse'
+
+  /api/v1/workshops/{id}/operating-hours:
+    get:
+      summary: Get workshop operating hours
+      tags:
+        - Workshops
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of operating schedules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatingHoursResponse'
+    put:
+      summary: Set weekly operating hours
+      tags:
+        - Workshops
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/OperatingHourInput'
+      responses:
+        '200':
+          description: Updated operating hours
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperatingHoursResponse'
+
+  /api/v1/workshops/{id}/available-slots:
+    get:
+      summary: Get available booking slots for a workshop on a date
+      description: Returns capacity-checked available time slots within operating hours for the given date.
+      tags:
+        - Bookings
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+          example: "2026-09-28"
+      responses:
+        '200':
+          description: Available slots schedule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AvailableSlotsResponse'
+
+  /api/v1/bookings:
+    post:
+      summary: Book a service appointment slot
+      description: Creates a concurrency-safe slot reservation. Double-booking is strictly prevented via transactional locking.
+      tags:
+        - Bookings
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBookingRequest'
+      responses:
+        '201':
+          description: Booking confirmed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingDetailResponse'
+        '409':
+          description: Slot capacity exhausted (BOOKING_SLOT_UNAVAILABLE)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/bookings/{id}:
+    get:
+      summary: Get booking details
+      tags:
+        - Bookings
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Booking details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingDetailResponse'
+
+  /api/v1/bookings/{id}/cancel:
+    post:
+      summary: Cancel a booking
+      description: Cancels a reservation and restores slot capacity. Allowed for the customer, workshop owner, or admin.
+      tags:
+        - Bookings
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Booking cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/me/bookings:
+    get:
+      summary: List authenticated customer's bookings
+      tags:
+        - Bookings
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List of customer bookings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingListResponse'
+
+  /api/v1/workshops/{id}/bookings:
+    get:
+      summary: List bookings for a workshop (Owner / Admin)
+      tags:
+        - Bookings
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Workshop bookings list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BookingListResponse'
+
+  /api/v1/workshops/{id}/services:
+    get:
+      summary: List services for a workshop
+      tags:
+        - Services
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of services
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceListResponse'
+    post:
+      summary: Create a service in a workshop
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateServiceRequest'
+      responses:
+        '201':
+          description: Service created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceDetailResponse'
+
+  /api/v1/services/{id}:
+    get:
+      summary: Get service details
+      tags:
+        - Services
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Service details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceDetailResponse'
+    patch:
+      summary: Update service
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateServiceRequest'
+      responses:
+        '200':
+          description: Updated service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceDetailResponse'
+    delete:
+      summary: Delete service
+      tags:
+        - Services
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Service deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/workshops/{id}/spare-parts:
+    get:
+      summary: List spare parts for a workshop
+      tags:
+        - Spare Parts
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of spare parts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SparePartListResponse'
+    post:
+      summary: Add spare part to workshop inventory
+      tags:
+        - Spare Parts
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSparePartRequest'
+      responses:
+        '201':
+          description: Spare part added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SparePartDetailResponse'
+
+  /api/v1/spare-parts/{id}:
+    get:
+      summary: Get spare part details
+      tags:
+        - Spare Parts
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Spare part details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SparePartDetailResponse'
+    patch:
+      summary: Update spare part
+      tags:
+        - Spare Parts
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSparePartRequest'
+      responses:
+        '200':
+          description: Updated spare part
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SparePartDetailResponse'
+    delete:
+      summary: Delete spare part
+      tags:
+        - Spare Parts
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Spare part deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /api/v1/bookings/{id}/check-in:
+    post:
+      summary: Check in for a confirmed booking on service day to get a queue ticket
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Queue ticket issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/queues/{id}:
+    get:
+      summary: Get queue ticket details and live wait estimation
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Queue ticket details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/me/queue/active:
+    get:
+      summary: Get customer's active queue ticket for today
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Active queue ticket details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/workshops/{id}/queues:
+    get:
+      summary: List workshop queue tickets for a date
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [WAITING, CALLED, IN_SERVICE, COMPLETED, NO_SHOW, CANCELLED]
+      responses:
+        '200':
+          description: Workshop queue list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueListResponse'
+
+  /api/v1/workshops/{id}/queues/summary:
+    get:
+      summary: Get live queue board summary for a workshop
+      tags:
+        - Queue
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: date
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Workshop queue summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueSummaryResponse'
+
+  /api/v1/workshops/{id}/queues/call-next:
+    post:
+      summary: Call next waiting customer in queue
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Called queue ticket
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/queues/{id}/call:
+    post:
+      summary: Call specific queue ticket
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Queue called
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/queues/{id}/start:
+    post:
+      summary: Start service for a queue ticket
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Service started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/queues/{id}/complete:
+    post:
+      summary: Complete service for a queue ticket
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Service completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/queues/{id}/no-show:
+    post:
+      summary: Mark queue ticket customer as no-show
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Queue marked as no-show
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/queues/{id}/cancel:
+    post:
+      summary: Cancel a queue ticket
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Queue cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDetailResponse'
+
+  /api/v1/workshops/{id}/service-histories:
+    post:
+      summary: Finalize service, decrement parts inventory, and record immutable history
+      tags:
+        - Service History
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateHistoryRequest'
+      responses:
+        '201':
+          description: Service history recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceHistoryDetailResponse'
+    get:
+      summary: List service history records for a workshop
+      tags:
+        - Service History
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            default: 20
+        - in: query
+          name: start_date
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: end_date
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: List of workshop service histories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceHistoryListResponse'
+
+  /api/v1/service-histories/{id}:
+    get:
+      summary: Get service history record details
+      tags:
+        - Service History
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Service history details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceHistoryDetailResponse'
+
+  /api/v1/bookings/{id}/service-history:
+    get:
+      summary: Get service history associated with a booking
+      tags:
+        - Service History
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Service history details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceHistoryDetailResponse'
+
+  /api/v1/me/service-histories:
+    get:
+      summary: List customer's service histories
+      tags:
+        - Service History
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: List of customer's service histories
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceHistoryListResponse'
+
+  /api/v1/reviews:
+    post:
+      summary: Submit rating and review for a completed booking
+      tags:
+        - Reviews
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReviewRequest'
+      responses:
+        '201':
+          description: Review submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDetailResponse'
+
+  /api/v1/reviews/{id}:
+    get:
+      summary: Get review details by ID
+      tags:
+        - Reviews
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Review details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDetailResponse'
+    patch:
+      summary: Update a submitted review
+      tags:
+        - Reviews
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateReviewRequest'
+      responses:
+        '200':
+          description: Review updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDetailResponse'
+
+  /api/v1/bookings/{id}/review:
+    get:
+      summary: Get review for a specific booking
+      tags:
+        - Reviews
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Booking review details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewDetailResponse'
+
+  /api/v1/workshops/{id}/reviews:
+    get:
+      summary: List reviews and ratings for a workshop
+      tags:
+        - Reviews
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+            default: 20
+  /api/v1/ws:
+    get:
+      summary: Real-time WebSocket connection for live queue, booking, and workshop event broadcasts
+      description: |
+        Upgrades the HTTP connection to a full-duplex WebSocket connection.
+        Authentication token can be supplied via `?token=<access_token>` query parameter or `Authorization: Bearer <token>` header.
+        Upon connection, clients are automatically subscribed to their own topic `user:<userID>`.
+        Clients can send JSON commands to `subscribe`, `unsubscribe`, or `ping`.
+      tags:
+        - Real-Time WebSocket
+      parameters:
+        - in: query
+          name: token
+          description: JWT Access Token
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: Upgrade
+          required: true
+          schema:
+            type: string
+            example: websocket
+        - in: header
+          name: Connection
+          required: true
+          schema:
+            type: string
+            example: Upgrade
+      responses:
+        '101':
+          description: Switching Protocols to WebSocket
+        '401':
+          description: Missing, invalid, or expired authentication token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/devices:
+    post:
+      summary: Register or update an FCM/APNs push notification device token
+      tags:
+        - Push Notifications
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterDeviceRequest'
+      responses:
+        '201':
+          description: Device token successfully registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDeviceResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/devices/{token}:
+    delete:
+      summary: Unregister / remove a device push token
+      tags:
+        - Push Notifications
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: token
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Device token unregistered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '404':
+          description: Device token not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/me/devices:
+    get:
+      summary: List all active registered devices for current user
+      tags:
+        - Push Notifications
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of registered devices
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserDeviceListResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    RegisterDeviceRequest:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          example: dGhpcyBpcyBhIHNhbXBsZSBmY20gdG9rZW4...
+        platform:
+          type: string
+          enum: [ANDROID, IOS, WEB]
+          default: ANDROID
+          example: ANDROID
+
+    UserDevice:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        token:
+          type: string
+        platform:
+          type: string
+          enum: [ANDROID, IOS, WEB]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    UserDeviceResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/UserDevice'
+
+    UserDeviceListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserDevice'
+
+    WebSocketInboundMessage:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          enum: [subscribe, unsubscribe, ping]
+          example: subscribe
+        topic:
+          type: string
+          example: workshop:84f7b607-e85d-4f10-911b-3f412586bf12
+
+    WebSocketOutboundMessage:
+      type: object
+      required:
+        - event
+        - timestamp
+      properties:
+        event:
+          type: string
+          enum:
+            - PONG
+            - SUBSCRIBED
+            - UNSUBSCRIBED
+            - ERROR
+            - QUEUE_CHECKED_IN
+            - QUEUE_CALLED
+            - QUEUE_STARTED
+            - QUEUE_COMPLETED
+            - QUEUE_NO_SHOW
+            - QUEUE_CANCELLED
+            - BOOKING_CREATED
+            - BOOKING_CANCELLED
+          example: QUEUE_CALLED
+        topic:
+          type: string
+          example: workshop:84f7b607-e85d-4f10-911b-3f412586bf12
+        data:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+    CreateReviewRequest:
+      type: object
+      required:
+        - booking_id
+        - rating
+      properties:
+        booking_id:
+          type: string
+          format: uuid
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+          example: 5
+        comment:
+          type: string
+          example: "Mekanik handal dan pengerjaan tepat waktu"
+
+    UpdateReviewRequest:
+      type: object
+      properties:
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+        comment:
+          type: string
+
+    Review:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        rating:
+          type: integer
+          example: 5
+        comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        customer:
+          $ref: '#/components/schemas/User'
+
+    ReviewDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Review'
+
+    ReviewListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Review'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    CreateHistoryItemRequest:
+      type: object
+      required:
+        - spare_part_id
+        - quantity
+      properties:
+        spare_part_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+          example: 2
+
+    CreateHistoryRequest:
+      type: object
+      required:
+        - booking_id
+      properties:
+        booking_id:
+          type: string
+          format: uuid
+        notes:
+          type: string
+          example: "Selesai ganti oli & kampas rem depan"
+        spare_parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/CreateHistoryItemRequest'
+
+    ServiceHistory:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        customer_id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        service_id:
+          type: string
+          format: uuid
+        service_date:
+          type: string
+          format: date
+        service_price:
+          type: number
+          format: double
+          example: 150000.00
+        total_price:
+          type: number
+          format: double
+          example: 280000.00
+        notes:
+          type: string
+        spare_parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceHistorySparePart'
+        created_at:
+          type: string
+          format: date-time
+        workshop:
+          $ref: '#/components/schemas/Workshop'
+        service:
+          $ref: '#/components/schemas/Service'
+
+    ServiceHistorySparePart:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        service_history_id:
+          type: string
+          format: uuid
+        spare_part_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          example: 2
+        price_per_unit:
+          type: number
+          format: double
+          example: 65000.00
+        subtotal:
+          type: number
+          format: double
+          example: 130000.00
+        created_at:
+          type: string
+          format: date-time
+        spare_part:
+          $ref: '#/components/schemas/SparePart'
+
+    ServiceHistoryDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/ServiceHistory'
+
+    ServiceHistoryListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceHistory'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    Queue:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        queue_date:
+          type: string
+          format: date
+        queue_number:
+          type: integer
+          example: 1
+        status:
+          type: string
+          enum: [WAITING, CALLED, IN_SERVICE, COMPLETED, NO_SHOW, CANCELLED]
+        customers_ahead:
+          type: integer
+          example: 2
+        estimated_wait_minutes:
+          type: integer
+          example: 40
+        called_at:
+          type: string
+          format: date-time
+        service_started_at:
+          type: string
+          format: date-time
+        service_completed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        booking:
+          $ref: '#/components/schemas/Booking'
+
+    QueueSummary:
+      type: object
+      properties:
+        workshop_id:
+          type: string
+          format: uuid
+        queue_date:
+          type: string
+          format: date
+        total_waiting:
+          type: integer
+        total_in_service:
+          type: integer
+        total_completed:
+          type: integer
+        current_serving_number:
+          type: integer
+          nullable: true
+        current_called_number:
+          type: integer
+          nullable: true
+
+    QueueDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Queue'
+
+    QueueListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Queue'
+
+    QueueSummaryResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/QueueSummary'
+    SuccessResponse:
+      type: object
+      required:
+        - success
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    ErrorResponse:
+      type: object
+      required:
+        - success
+        - error
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          $ref: '#/components/schemas/APIError'
+
+    APIError:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties:
+            type: string
+
+    PaginationMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_items:
+          type: integer
+          format: int64
+        total_pages:
+          type: integer
+
+    CreateBookingRequest:
+      type: object
+      required:
+        - workshop_id
+        - service_id
+        - booking_date
+        - booking_time
+      properties:
+        workshop_id:
+          type: string
+          format: uuid
+        service_id:
+          type: string
+          format: uuid
+        booking_date:
+          type: string
+          format: date
+          example: "2026-09-28"
+        booking_time:
+          type: string
+          example: "10:00:00"
+        customer_notes:
+          type: string
+          example: "Tolong periksa kampas rem juga"
+
+    Booking:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_number:
+          type: string
+          example: "BK-20260928-A1B2"
+        customer_id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        service_id:
+          type: string
+          format: uuid
+        slot_id:
+          type: string
+          format: uuid
+        booking_date:
+          type: string
+          format: date
+        booking_time:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, CANCELLED, NO_SHOW, IN_SERVICE, COMPLETED]
+        customer_notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        workshop:
+          $ref: '#/components/schemas/Workshop'
+        service:
+          $ref: '#/components/schemas/Service'
+
+    BookingDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Booking'
+
+    BookingListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Booking'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    AvailableSlotsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          properties:
+            workshop_id:
+              type: string
+              format: uuid
+            date:
+              type: string
+              format: date
+            day_of_week:
+              type: integer
+            is_closed:
+              type: boolean
+            open_time:
+              type: string
+            close_time:
+              type: string
+            slots:
+              type: array
+              items:
+                type: object
+                properties:
+                  start_time:
+                    type: string
+                  end_time:
+                    type: string
+                  max_capacity:
+                    type: integer
+                  booked_count:
+                    type: integer
+                  is_available:
+                    type: boolean
+
+    CreateWorkshopRequest:
+      type: object
+      required:
+        - name
+        - address
+        - latitude
+        - longitude
+        - phone
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        address:
+          type: string
+        latitude:
+          type: number
+          format: double
+        longitude:
+          type: number
+          format: double
+        phone:
+          type: string
+
+    UpdateWorkshopRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        address:
+          type: string
+        latitude:
+          type: number
+          format: double
+        longitude:
+          type: number
+          format: double
+        phone:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, SUSPENDED]
+
+    OperatingHourInput:
+      type: object
+      required:
+        - day_of_week
+      properties:
+        day_of_week:
+          type: integer
+        open_time:
+          type: string
+        close_time:
+          type: string
+        is_closed:
+          type: boolean
+
+    OperatingHour:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        day_of_week:
+          type: integer
+        open_time:
+          type: string
+        close_time:
+          type: string
+        is_closed:
+          type: boolean
+
+    Workshop:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        address:
+          type: string
+        latitude:
+          type: number
+          format: double
+        longitude:
+          type: number
+          format: double
+        phone:
+          type: string
+        rating:
+          type: number
+          format: float
+        review_count:
+          type: integer
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, SUSPENDED]
+
+    WorkshopListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Workshop'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    NearbyWorkshopsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Workshop'
+
+    WorkshopDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Workshop'
+
+    OperatingHoursResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/OperatingHour'
+
+    CreateServiceRequest:
+      type: object
+      required:
+        - name
+        - price
+        - duration_minutes
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+          format: double
+        duration_minutes:
+          type: integer
+        is_active:
+          type: boolean
+
+    UpdateServiceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+          format: double
+        duration_minutes:
+          type: integer
+        is_active:
+          type: boolean
+
+    Service:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+          format: double
+        duration_minutes:
+          type: integer
+        is_active:
+          type: boolean
+
+    ServiceListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Service'
+
+    ServiceDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/Service'
+
+    CreateSparePartRequest:
+      type: object
+      required:
+        - name
+        - selling_price
+        - stock
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        purchase_price:
+          type: number
+          format: double
+        selling_price:
+          type: number
+          format: double
+        stock:
+          type: integer
+        is_active:
+          type: boolean
+
+    UpdateSparePartRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        purchase_price:
+          type: number
+          format: double
+        selling_price:
+          type: number
+          format: double
+        stock:
+          type: integer
+        is_active:
+          type: boolean
+
+    SparePart:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        purchase_price:
+          type: number
+          format: double
+        selling_price:
+          type: number
+          format: double
+        stock:
+          type: integer
+        is_active:
+          type: boolean
+
+    SparePartListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SparePart'
+
+    SparePartDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/SparePart'
+
+    RegisterRequest:
+      type: object
+      required:
+        - name
+        - email
+        - password
+        - phone
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          format: password
+        phone:
+          type: string
+        role:
+          type: string
+          enum: [CUSTOMER, OWNER]
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    RefreshTokenRequest:
+      type: object
+      required:
+        - refresh_token
+      properties:
+        refresh_token:
+          type: string
+
+    AuthResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            tokens:
+              $ref: '#/components/schemas/TokenPair'
+
+    UserProfileResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          $ref: '#/components/schemas/User'
+
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+        expires_in:
+          type: integer
+        access_expires_at:
+          type: string
+          format: date-time
+        refresh_expires_at:
+          type: string
+          format: date-time
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        phone:
+          type: string
+        role:
+          type: string
+          enum: [CUSTOMER, OWNER, ADMIN]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
