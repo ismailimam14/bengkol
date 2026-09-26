@@ -1,0 +1,219 @@
+package handler
+
+import (
+	"net/http"
+
+	"github.com/bengkol/backend/config"
+	"github.com/bengkol/backend/internal/auth"
+	"github.com/bengkol/backend/internal/booking"
+	"github.com/bengkol/backend/internal/domain"
+	"github.com/bengkol/backend/internal/history"
+	"github.com/bengkol/backend/internal/middleware"
+	"github.com/bengkol/backend/internal/queue"
+	"github.com/bengkol/backend/internal/review"
+	"github.com/bengkol/backend/internal/service"
+	"github.com/bengkol/backend/internal/sparepart"
+	"github.com/bengkol/backend/internal/websocket"
+	"github.com/bengkol/backend/internal/workshop"
+	"github.com/bengkol/backend/pkg/logger"
+	"github.com/bengkol/backend/pkg/response"
+	"github.com/bengkol/backend/pkg/security"
+	"github.com/go-chi/chi/v5"
+)
+
+// RouterConfig contains dependencies needed to configure the HTTP router.
+type RouterConfig struct {
+	Config           *config.Config
+	Logger           *logger.Logger
+	HealthHandler    *HealthHandler
+	AuthHandler      *auth.Handler
+	WorkshopHandler  *workshop.Handler
+	ServiceHandler   *service.Handler
+	SparePartHandler *sparepart.Handler
+	BookingHandler   *booking.Handler
+	QueueHandler     *queue.Handler
+	HistoryHandler   *history.Handler
+	ReviewHandler    *review.Handler
+	WSHandler        *websocket.Handler
+	JWTManager       *security.JWTManager
+}
+
+// NewRouter constructs and configures the top-level Chi router.
+func NewRouter(cfg RouterConfig) *chi.Mux {
+	r := chi.NewRouter()
+
+	// Global Middlewares
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RequestLogger(cfg.Logger))
+	r.Use(middleware.Recoverer(cfg.Logger))
+	r.Use(middleware.CORS(cfg.Config.CORS))
+
+	// Auth token extraction middleware (attaches claims if Bearer token present)
+	if cfg.JWTManager != nil {
+		r.Use(middleware.Authenticate(cfg.JWTManager, cfg.Logger))
+	}
+
+	// Custom 404 Not Found handler
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		response.Error(w, http.StatusNotFound, response.ErrCodeNotFound, "The requested endpoint does not exist")
+	})
+
+	// Custom 405 Method Not Allowed handler
+	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
+		response.Error(w, http.StatusMethodNotAllowed, response.ErrCodeBadRequest, "HTTP method not allowed for this endpoint")
+	})
+
+	// Liveness and Readiness Probes
+	r.Get("/health", cfg.HealthHandler.Health)
+	r.Get("/ready", cfg.HealthHandler.Ready)
+
+	// API v1 Sub-router
+	r.Route("/api/v1", func(v1 chi.Router) {
+		v1.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
+			response.Success(w, http.StatusOK, map[string]string{
+				"message": "Bengkol API v1 is operational",
+				"version": "1.0.0",
+			})
+		})
+
+		// Auth Routes (/api/v1/auth)
+		if cfg.AuthHandler != nil {
+			v1.Mount("/auth", cfg.AuthHandler.Routes())
+
+			// Protected /me endpoint
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+				protected.Get("/me", cfg.AuthHandler.GetMe)
+			})
+		}
+
+		// Workshop Routes (/api/v1/workshops)
+		if cfg.WorkshopHandler != nil {
+			// Public discovery endpoints
+			v1.Get("/workshops", cfg.WorkshopHandler.List)
+			v1.Get("/workshops/nearby", cfg.WorkshopHandler.FindNearby)
+			v1.Get("/workshops/{id}", cfg.WorkshopHandler.GetByID)
+			v1.Get("/workshops/{id}/operating-hours", cfg.WorkshopHandler.GetOperatingHours)
+
+			// Protected workshop management endpoints
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+				protected.Get("/me/workshops", cfg.WorkshopHandler.GetMyWorkshops)
+
+				// Owner-only creation
+				protected.With(middleware.RequireRoles(domain.RoleOwner)).Post("/workshops", cfg.WorkshopHandler.Create)
+
+				// Owner / Admin modifications
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Patch("/workshops/{id}", cfg.WorkshopHandler.Update)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Put("/workshops/{id}/operating-hours", cfg.WorkshopHandler.UpdateOperatingHours)
+			})
+		}
+
+		// Services Routes (/api/v1/workshops/:id/services and /api/v1/services/:id)
+		if cfg.ServiceHandler != nil {
+			v1.Get("/workshops/{id}/services", cfg.ServiceHandler.ListByWorkshop)
+			v1.Get("/services/{id}", cfg.ServiceHandler.GetByID)
+
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+				protected.With(middleware.RequireRoles(domain.RoleOwner)).Post("/workshops/{id}/services", cfg.ServiceHandler.Create)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Patch("/services/{id}", cfg.ServiceHandler.Update)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Delete("/services/{id}", cfg.ServiceHandler.Delete)
+			})
+		}
+
+		// Spare Parts Routes (/api/v1/workshops/:id/spare-parts and /api/v1/spare-parts/:id)
+		if cfg.SparePartHandler != nil {
+			v1.Get("/workshops/{id}/spare-parts", cfg.SparePartHandler.ListByWorkshop)
+			v1.Get("/spare-parts/{id}", cfg.SparePartHandler.GetByID)
+
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+				protected.With(middleware.RequireRoles(domain.RoleOwner)).Post("/workshops/{id}/spare-parts", cfg.SparePartHandler.Create)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Patch("/spare-parts/{id}", cfg.SparePartHandler.Update)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Delete("/spare-parts/{id}", cfg.SparePartHandler.Delete)
+			})
+		}
+
+		// Booking Routes (/api/v1/workshops/:id/available-slots, /api/v1/bookings, /api/v1/me/bookings)
+		if cfg.BookingHandler != nil {
+			v1.Get("/workshops/{id}/available-slots", cfg.BookingHandler.GetAvailableSlots)
+
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+
+				// Customer booking creation & list
+				protected.Post("/bookings", cfg.BookingHandler.Create)
+				protected.Get("/bookings/{id}", cfg.BookingHandler.GetByID)
+				protected.Post("/bookings/{id}/cancel", cfg.BookingHandler.Cancel)
+				protected.Get("/me/bookings", cfg.BookingHandler.ListMyBookings)
+
+				// Owner / Admin workshop bookings
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Get("/workshops/{id}/bookings", cfg.BookingHandler.ListWorkshopBookings)
+			})
+		}
+
+		// Queue Routes (/api/v1/queues, /api/v1/workshops/:id/queues, /api/v1/bookings/:id/check-in)
+		if cfg.QueueHandler != nil {
+			// Public queue summary board
+			v1.Get("/workshops/{id}/queues/summary", cfg.QueueHandler.GetSummary)
+
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+
+				// Customer / General queue actions
+				protected.Post("/bookings/{id}/check-in", cfg.QueueHandler.CheckIn)
+				protected.Get("/queues/{id}", cfg.QueueHandler.GetByID)
+				protected.Get("/me/queue/active", cfg.QueueHandler.GetActiveCustomerQueue)
+				protected.Post("/queues/{id}/cancel", cfg.QueueHandler.CancelQueue)
+
+				// Workshop Owner / Admin queue operational controls
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Get("/workshops/{id}/queues", cfg.QueueHandler.ListByWorkshop)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Post("/workshops/{id}/queues/call-next", cfg.QueueHandler.CallNext)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Post("/queues/{id}/call", cfg.QueueHandler.CallQueue)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Post("/queues/{id}/start", cfg.QueueHandler.StartService)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Post("/queues/{id}/complete", cfg.QueueHandler.CompleteService)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Post("/queues/{id}/no-show", cfg.QueueHandler.MarkNoShow)
+			})
+		}
+
+		// Service History Routes (/api/v1/service-histories, /api/v1/workshops/:id/service-histories, /api/v1/me/service-histories)
+		if cfg.HistoryHandler != nil {
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+
+				// Customer / General view history
+				protected.Get("/service-histories/{id}", cfg.HistoryHandler.GetByID)
+				protected.Get("/bookings/{id}/service-history", cfg.HistoryHandler.GetByBookingID)
+				protected.Get("/me/service-histories", cfg.HistoryHandler.ListCustomerHistories)
+
+				// Workshop Owner / Admin records
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Post("/workshops/{id}/service-histories", cfg.HistoryHandler.Create)
+				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Get("/workshops/{id}/service-histories", cfg.HistoryHandler.ListWorkshopHistories)
+			})
+		}
+
+		// Review Routes (/api/v1/reviews, /api/v1/workshops/:id/reviews, /api/v1/bookings/:id/review)
+		if cfg.ReviewHandler != nil {
+			// Public review discovery
+			v1.Get("/workshops/{id}/reviews", cfg.ReviewHandler.ListByWorkshop)
+			v1.Get("/reviews/{id}", cfg.ReviewHandler.GetByID)
+			v1.Get("/bookings/{id}/review", cfg.ReviewHandler.GetByBookingID)
+
+			// Protected customer review actions
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+
+				protected.With(middleware.RequireRoles(domain.RoleCustomer)).Post("/reviews", cfg.ReviewHandler.Create)
+				protected.Patch("/reviews/{id}", cfg.ReviewHandler.Update)
+			})
+		}
+
+		// Real-time WebSocket Route (/api/v1/ws)
+		if cfg.WSHandler != nil {
+			v1.Get("/ws", cfg.WSHandler.ServeWS)
+		}
+	})
+
+	return r
+}

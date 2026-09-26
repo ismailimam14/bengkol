@@ -1,0 +1,26 @@
+# Binaries and build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Environment local overrides
+.env
+!.env.example
+
+# Test and coverage artifacts
+*.out
+*.test
+coverage.html
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
