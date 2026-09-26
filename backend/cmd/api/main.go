@@ -113,6 +113,7 @@ func main() {
 
 	// 9. Initialize Handlers
 	healthHandler := handler.NewHealthHandler(db)
+	docsHandler := handler.NewDocsHandler()
 	authHandler := auth.NewHandler(authService, log)
 	workshopHandler := workshop.NewHandler(workshopService, log)
 	serviceHandler := service.NewHandler(serviceService, log)
@@ -129,6 +130,7 @@ func main() {
 		Config:           cfg,
 		Logger:           log,
 		HealthHandler:    healthHandler,
+		DocsHandler:      docsHandler,
 		AuthHandler:      authHandler,
 		WorkshopHandler:  workshopHandler,
 		ServiceHandler:   serviceHandler,

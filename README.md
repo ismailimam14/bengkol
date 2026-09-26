@@ -112,11 +112,15 @@ go test -v ./...
 
 ---
 
-## Health Check & Verification Endpoints
+## Interactive API Documentation & Verification Endpoints
 
-- **Liveness Probe**: `GET http://localhost:8080/health`
-- **Readiness Probe**: `GET http://localhost:8080/ready`
+- **Swagger UI Interactive Explorer**: `http://localhost:8080/docs` (or `http://localhost:8080/swagger`)
+- **ReDoc Interactive Documentation**: `http://localhost:8080/redoc`
+- **OpenAPI 3.0 YAML Specification**: `http://localhost:8080/docs/openapi.yaml`
+- **Liveness Health Check**: `GET http://localhost:8080/health`
+- **Readiness Health Check**: `GET http://localhost:8080/ready`
 - **API Ping**: `GET http://localhost:8080/api/v1/ping`
+- **Real-time WebSocket Endpoint**: `ws://localhost:8080/api/v1/ws?token=<jwt_access_token>`
 
 ---
 

@@ -27,6 +27,7 @@ type RouterConfig struct {
 	Config           *config.Config
 	Logger           *logger.Logger
 	HealthHandler    *HealthHandler
+	DocsHandler      *DocsHandler
 	AuthHandler      *auth.Handler
 	WorkshopHandler  *workshop.Handler
 	ServiceHandler   *service.Handler
@@ -68,6 +69,16 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	// Liveness and Readiness Probes
 	r.Get("/health", cfg.HealthHandler.Health)
 	r.Get("/ready", cfg.HealthHandler.Ready)
+
+	// Interactive API Documentation (Swagger UI & ReDoc)
+	if cfg.DocsHandler != nil {
+		r.Get("/docs", cfg.DocsHandler.SwaggerUI)
+		r.Get("/swagger", func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/docs", http.StatusMovedPermanently)
+		})
+		r.Get("/redoc", cfg.DocsHandler.ReDoc)
+		r.Get("/docs/openapi.yaml", cfg.DocsHandler.OpenAPI)
+	}
 
 	// API v1 Sub-router
 	r.Route("/api/v1", func(v1 chi.Router) {
