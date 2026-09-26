@@ -1,5 +1,7 @@
 # Stage 1: Build binary
-FROM golang:1.22-alpine AS builder
+FROM golang:alpine AS builder
+
+ENV GOTOOLCHAIN=auto
 
 WORKDIR /app
 
@@ -14,7 +16,7 @@ RUN go mod download
 COPY . .
 
 # Build statically linked binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/bin/bengkol-api ./cmd/api
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/bin/bengkol-api ./cmd/api
 
 # Stage 2: Minimal runtime image
 FROM alpine:3.19
