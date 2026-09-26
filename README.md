@@ -114,6 +114,12 @@ go test -v ./...
 
 ## Interactive API Documentation & Verification Endpoints
 
+### 🌐 Hosted Online Documentation (GitHub Pages)
+- **Live Swagger UI & ReDoc Portal**: [https://ismailimam14.github.io/bengkol/](https://ismailimam14.github.io/bengkol/)
+- **Live ReDoc Mode**: [https://ismailimam14.github.io/bengkol/#redoc](https://ismailimam14.github.io/bengkol/#redoc)
+- **OpenAPI Specification**: [https://ismailimam14.github.io/bengkol/openapi.yaml](https://ismailimam14.github.io/bengkol/openapi.yaml)
+
+### 💻 Local Server Documentation Endpoints
 - **Swagger UI Interactive Explorer**: `http://localhost:8080/docs` (or `http://localhost:8080/swagger`)
 - **ReDoc Interactive Documentation**: `http://localhost:8080/redoc`
 - **OpenAPI 3.0 YAML Specification**: `http://localhost:8080/docs/openapi.yaml`
