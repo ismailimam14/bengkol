@@ -16,6 +16,7 @@ import (
 	"github.com/bengkol/backend/internal/booking"
 	"github.com/bengkol/backend/internal/handler"
 	"github.com/bengkol/backend/internal/history"
+	"github.com/bengkol/backend/internal/notification"
 	"github.com/bengkol/backend/internal/queue"
 	"github.com/bengkol/backend/internal/review"
 	"github.com/bengkol/backend/internal/service"
@@ -80,7 +81,12 @@ func main() {
 	go wsHub.Run(hubCtx)
 	log.Info("websocket hub initialized and running")
 
-	// 7. Initialize Repositories and Services
+	// 7. Initialize Push Notification Infrastructure & Dispatcher
+	deviceRepo := notification.NewRepository(db.DB)
+	fcmDispatcher := notification.NewFCMDispatcher(deviceRepo, log)
+	deviceService := notification.NewService(deviceRepo, log)
+
+	// 8. Initialize Repositories and Domain Services
 	authRepo := auth.NewRepository(db.DB)
 	authService := auth.NewService(authRepo, jwtMgr, log)
 
@@ -97,7 +103,7 @@ func main() {
 	bookingService := booking.NewService(bookingRepo, log)
 
 	queueRepo := queue.NewRepository(db.DB)
-	queueService := queue.NewService(queueRepo, log, wsHub)
+	queueService := queue.NewService(queueRepo, log, wsHub, fcmDispatcher)
 
 	historyRepo := history.NewRepository(db.DB)
 	historyService := history.NewService(historyRepo, log)
@@ -105,7 +111,7 @@ func main() {
 	reviewRepo := review.NewRepository(db.DB)
 	reviewService := review.NewService(reviewRepo, log)
 
-	// 8. Initialize Handlers
+	// 9. Initialize Handlers
 	healthHandler := handler.NewHealthHandler(db)
 	authHandler := auth.NewHandler(authService, log)
 	workshopHandler := workshop.NewHandler(workshopService, log)
@@ -116,8 +122,9 @@ func main() {
 	historyHandler := history.NewHandler(historyService, log)
 	reviewHandler := review.NewHandler(reviewService, log)
 	wsHandler := websocket.NewHandler(wsHub, jwtMgr, log)
+	deviceHandler := notification.NewHandler(deviceService, log)
 
-	// 9. Build HTTP Router
+	// 10. Build HTTP Router
 	router := handler.NewRouter(handler.RouterConfig{
 		Config:           cfg,
 		Logger:           log,
@@ -130,6 +137,7 @@ func main() {
 		QueueHandler:     queueHandler,
 		HistoryHandler:   historyHandler,
 		ReviewHandler:    reviewHandler,
+		DeviceHandler:    deviceHandler,
 		WSHandler:        wsHandler,
 		JWTManager:       jwtMgr,
 	})

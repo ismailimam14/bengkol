@@ -234,12 +234,28 @@ func (m *mockBroadcaster) Broadcast(topic string, event string, data interface{}
 	}{Topic: topic, Event: event, Data: data})
 }
 
+type mockPushDispatcher struct {
+	dispatched []struct {
+		UserID  uuid.UUID
+		Payload domain.PushNotificationPayload
+	}
+}
+
+func (m *mockPushDispatcher) SendToUser(ctx context.Context, userID uuid.UUID, payload domain.PushNotificationPayload) error {
+	m.dispatched = append(m.dispatched, struct {
+		UserID  uuid.UUID
+		Payload domain.PushNotificationPayload
+	}{UserID: userID, Payload: payload})
+	return nil
+}
+
 func setupQueueService() (queue.Service, *mockQueueRepo) {
 	repo := newMockQueueRepo()
 	var buf bytes.Buffer
 	log := logger.NewWithOutput("development", "debug", &buf)
 	broadcaster := &mockBroadcaster{}
-	svc := queue.NewService(repo, log, broadcaster)
+	dispatcher := &mockPushDispatcher{}
+	svc := queue.NewService(repo, log, broadcaster, dispatcher)
 	return svc, repo
 }
 

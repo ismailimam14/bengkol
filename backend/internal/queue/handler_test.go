@@ -23,7 +23,7 @@ func setupTestAppWithQueue() (chi.Router, *mockQueueRepo, *security.JWTManager) 
 	var buf bytes.Buffer
 	log := logger.NewWithOutput("development", "debug", &buf)
 
-	qUseCase := queue.NewService(qRepo, log, nil)
+	qUseCase := queue.NewService(qRepo, log, nil, nil)
 	qHdl := queue.NewHandler(qUseCase, log)
 	healthHdl := handler.NewHealthHandler(nil)
 

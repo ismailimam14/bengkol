@@ -71,6 +71,11 @@ A high-performance auto repair-shop / workshop management system connecting vehi
    - Multiplexed channel and topic routing (`workshop:{id}`, `user:{id}`, `booking:{id}`).
    - Instantaneous event broadcasting for live queue calling, status updates, and bookings.
 
+9. **Push Notifications & FCM Dispatcher (Phase 10)**:
+   - Device token registration (`POST /api/v1/devices`, `DELETE /api/v1/devices/{token}`, `GET /api/v1/me/devices`).
+   - Push notification dispatcher (`FCMDispatcher`) triggering native OS alerts when queues are called, service starts/completes, or bookings update.
+   - Dual delivery mechanism: real-time WebSocket when app is foregrounded + FCM background push when app is closed.
+
 ---
 
 ## Local Development Quickstart

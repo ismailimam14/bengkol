@@ -24,6 +24,11 @@ type Broadcaster interface {
 	Broadcast(topic string, event string, data interface{})
 }
 
+// PushDispatcher allows sending native mobile push notifications to users.
+type PushDispatcher interface {
+	SendToUser(ctx context.Context, userID uuid.UUID, payload domain.PushNotificationPayload) error
+}
+
 // Service defines the business logic for queue management
 type Service interface {
 	CheckInBooking(ctx context.Context, bookingID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole) (*domain.Queue, error)
@@ -42,14 +47,16 @@ type Service interface {
 type queueService struct {
 	repo        Repository
 	broadcaster Broadcaster
+	dispatcher  PushDispatcher
 	logger      *logger.Logger
 }
 
 // NewService creates a new instance of queue service
-func NewService(repo Repository, log *logger.Logger, broadcaster Broadcaster) Service {
+func NewService(repo Repository, log *logger.Logger, broadcaster Broadcaster, dispatcher PushDispatcher) Service {
 	return &queueService{
 		repo:        repo,
 		broadcaster: broadcaster,
+		dispatcher:  dispatcher,
 		logger:      log,
 	}
 }
@@ -57,6 +64,12 @@ func NewService(repo Repository, log *logger.Logger, broadcaster Broadcaster) Se
 func (s *queueService) broadcast(topic string, event string, data interface{}) {
 	if s.broadcaster != nil {
 		s.broadcaster.Broadcast(topic, event, data)
+	}
+}
+
+func (s *queueService) dispatchPush(ctx context.Context, userID uuid.UUID, payload domain.PushNotificationPayload) {
+	if s.dispatcher != nil {
+		_ = s.dispatcher.SendToUser(ctx, userID, payload)
 	}
 }
 
@@ -146,6 +159,17 @@ func (s *queueService) CheckInBooking(ctx context.Context, bookingID uuid.UUID, 
 
 	s.broadcast(fmt.Sprintf("workshop:%s", b.WorkshopID), "QUEUE_CHECKED_IN", q)
 	s.broadcast(fmt.Sprintf("user:%s", b.CustomerID), "QUEUE_CHECKED_IN", q)
+
+	s.dispatchPush(ctx, b.CustomerID, domain.PushNotificationPayload{
+		Title: "Check-in Antrean Berhasil ✅",
+		Body:  fmt.Sprintf("Nomor antrean Anda adalah #%d. Estimasi waktu tunggu: %d menit.", q.QueueNumber, q.EstimatedWaitMin),
+		Data: map[string]string{
+			"type":        "QUEUE_CHECKED_IN",
+			"queue_id":    q.ID.String(),
+			"workshop_id": b.WorkshopID.String(),
+			"queue_num":   fmt.Sprintf("%d", q.QueueNumber),
+		},
+	})
 
 	return q, nil
 }
@@ -274,6 +298,17 @@ func (s *queueService) CallQueue(ctx context.Context, queueID uuid.UUID, request
 	if b, err := s.repo.GetBookingByID(ctx, q.BookingID); err == nil && b != nil {
 		q.Booking = b
 		s.broadcast(fmt.Sprintf("user:%s", b.CustomerID), "QUEUE_CALLED", q)
+		s.dispatchPush(ctx, b.CustomerID, domain.PushNotificationPayload{
+			Title:    "Nomor Antrean Dipanggil! 📢",
+			Body:     fmt.Sprintf("Nomor antrean #%d Anda telah dipanggil. Silakan menuju stall servis.", q.QueueNumber),
+			Priority: "HIGH",
+			Data: map[string]string{
+				"type":        "QUEUE_CALLED",
+				"queue_id":    q.ID.String(),
+				"workshop_id": q.WorkshopID.String(),
+				"queue_num":   fmt.Sprintf("%d", q.QueueNumber),
+			},
+		})
 	}
 
 	return q, nil
@@ -357,6 +392,14 @@ func (s *queueService) StartService(ctx context.Context, queueID uuid.UUID, requ
 	if b, err := s.repo.GetBookingByID(ctx, q.BookingID); err == nil && b != nil {
 		q.Booking = b
 		s.broadcast(fmt.Sprintf("user:%s", b.CustomerID), "QUEUE_STARTED", q)
+		s.dispatchPush(ctx, b.CustomerID, domain.PushNotificationPayload{
+			Title: "Pengerjaan Servis Dimulai 🔧",
+			Body:  "Kendaraan Anda sedang dalam proses pengerjaan oleh teknisi bengkel.",
+			Data: map[string]string{
+				"type":     "QUEUE_STARTED",
+				"queue_id": q.ID.String(),
+			},
+		})
 	}
 
 	return q, nil
@@ -414,6 +457,16 @@ func (s *queueService) CompleteService(ctx context.Context, queueID uuid.UUID, r
 	if b, err := s.repo.GetBookingByID(ctx, q.BookingID); err == nil && b != nil {
 		q.Booking = b
 		s.broadcast(fmt.Sprintf("user:%s", b.CustomerID), "QUEUE_COMPLETED", q)
+		s.dispatchPush(ctx, b.CustomerID, domain.PushNotificationPayload{
+			Title: "Servis Kendaraan Selesai! 🎉",
+			Body:  "Pengerjaan kendaraan Anda telah selesai. Silakan lakukan penyelesaian pembayaran dan pengambilan.",
+			Data: map[string]string{
+				"type":        "QUEUE_COMPLETED",
+				"queue_id":    q.ID.String(),
+				"booking_id":  b.ID.String(),
+				"workshop_id": q.WorkshopID.String(),
+			},
+		})
 	}
 
 	return q, nil

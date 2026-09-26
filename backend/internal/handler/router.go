@@ -9,6 +9,7 @@ import (
 	"github.com/bengkol/backend/internal/domain"
 	"github.com/bengkol/backend/internal/history"
 	"github.com/bengkol/backend/internal/middleware"
+	"github.com/bengkol/backend/internal/notification"
 	"github.com/bengkol/backend/internal/queue"
 	"github.com/bengkol/backend/internal/review"
 	"github.com/bengkol/backend/internal/service"
@@ -34,6 +35,7 @@ type RouterConfig struct {
 	QueueHandler     *queue.Handler
 	HistoryHandler   *history.Handler
 	ReviewHandler    *review.Handler
+	DeviceHandler    *notification.Handler
 	WSHandler        *websocket.Handler
 	JWTManager       *security.JWTManager
 }
@@ -212,6 +214,16 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		// Real-time WebSocket Route (/api/v1/ws)
 		if cfg.WSHandler != nil {
 			v1.Get("/ws", cfg.WSHandler.ServeWS)
+		}
+
+		// Device Push Notification Routes (/api/v1/devices, /api/v1/me/devices)
+		if cfg.DeviceHandler != nil {
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+				protected.Post("/devices", cfg.DeviceHandler.RegisterDevice)
+				protected.Delete("/devices/{token}", cfg.DeviceHandler.UnregisterDevice)
+				protected.Get("/me/devices", cfg.DeviceHandler.GetMyDevices)
+			})
 		}
 	})
 
