@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -148,7 +148,7 @@ func (m *Migrator) loadMigrationFiles() ([]migrationFile, error) {
 		files = append(files, migrationFile{
 			version: version,
 			name:    entry.Name(),
-			path:    filepath.Join("migrations", entry.Name()),
+			path:    path.Join("migrations", entry.Name()),
 			isUp:    isUp,
 		})
 	}
