@@ -81,6 +81,7 @@ paths:
   /api/v1/auth/login:
     post:
       summary: Authenticate user
+      description: Authenticate a user and return a JWT token pair. Either email or phone number must be provided alongside the password.
       tags:
         - Authentication
       requestBody:
@@ -2213,15 +2214,23 @@ components:
 
     LoginRequest:
       type: object
+      description: Login request payload. User can authenticate using either email or phone number with password.
       required:
-        - email
         - password
       properties:
         email:
           type: string
           format: email
+          example: user@example.com
+          description: User email address (mandatory if phone is not provided)
+        phone:
+          type: string
+          example: "081234567890"
+          description: User phone number (mandatory if email is not provided)
         password:
           type: string
+          format: password
+          example: SecurePass123!
 
     RefreshTokenRequest:
       type: object

@@ -20,6 +20,7 @@ var (
 type Repository interface {
 	CreateUser(ctx context.Context, user *domain.User) error
 	GetUserByEmail(ctx context.Context, email string) (*domain.User, error)
+	GetUserByPhone(ctx context.Context, phone string) (*domain.User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
 	SaveRefreshToken(ctx context.Context, token *domain.RefreshToken) error
 	GetRefreshToken(ctx context.Context, tokenHash string) (*domain.RefreshToken, error)
@@ -81,6 +82,32 @@ func (r *postgresRepository) GetUserByEmail(ctx context.Context, email string) (
 			return nil, ErrUserNotFound
 		}
 		return nil, fmt.Errorf("failed to query user by email: %w", err)
+	}
+	return &u, nil
+}
+
+func (r *postgresRepository) GetUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	query := `
+		SELECT id, email, password_hash, name, phone, role, created_at, updated_at
+		FROM users
+		WHERE phone = $1
+	`
+	var u domain.User
+	err := r.db.QueryRowContext(ctx, query, phone).Scan(
+		&u.ID,
+		&u.Email,
+		&u.PasswordHash,
+		&u.Name,
+		&u.Phone,
+		&u.Role,
+		&u.CreatedAt,
+		&u.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("failed to query user by phone: %w", err)
 	}
 	return &u, nil
 }

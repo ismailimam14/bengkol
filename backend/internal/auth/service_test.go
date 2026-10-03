@@ -45,6 +45,15 @@ func (m *mockAuthRepo) GetUserByEmail(ctx context.Context, email string) (*domai
 	return u, nil
 }
 
+func (m *mockAuthRepo) GetUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	for _, u := range m.usersByID {
+		if u.Phone == phone {
+			return u, nil
+		}
+	}
+	return nil, auth.ErrUserNotFound
+}
+
 func (m *mockAuthRepo) GetUserByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	u, ok := m.usersByID[id]
 	if !ok {
@@ -248,6 +257,178 @@ func TestAuthService_Login_InvalidPassword(t *testing.T) {
 	})
 	if !errors.Is(err, auth.ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
+	}
+}
+
+func TestAuthService_Login_Success_WithPhone(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	regReq := auth.RegisterRequest{
+		Name:     "Phone User",
+		Email:    "phoneuser@example.com",
+		Password: "password123",
+		Phone:    "081298765432",
+		Role:     domain.RoleCustomer,
+	}
+	_, _, err := svc.Register(context.Background(), regReq)
+	if err != nil {
+		t.Fatalf("registration error: %v", err)
+	}
+
+	// Login with Phone only (Email empty)
+	loginResp, err := svc.Login(context.Background(), auth.LoginRequest{
+		Phone:    "081298765432",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on login with phone: %v", err)
+	}
+
+	if loginResp.User.Phone != "081298765432" {
+		t.Errorf("expected user phone 081298765432, got %s", loginResp.User.Phone)
+	}
+	if loginResp.Tokens.AccessToken == "" {
+		t.Errorf("expected non-empty access token")
+	}
+}
+
+func TestAuthService_Login_Success_WithPhoneNumberField(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	regReq := auth.RegisterRequest{
+		Name:     "Phone User",
+		Email:    "phoneuser2@example.com",
+		Password: "password123",
+		Phone:    "081233445566",
+		Role:     domain.RoleCustomer,
+	}
+	_, _, err := svc.Register(context.Background(), regReq)
+	if err != nil {
+		t.Fatalf("registration error: %v", err)
+	}
+
+	// Login with PhoneNumber field
+	loginResp, err := svc.Login(context.Background(), auth.LoginRequest{
+		PhoneNumber: "081233445566",
+		Password:    "password123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on login with phone_number: %v", err)
+	}
+
+	if loginResp.User.Phone != "081233445566" {
+		t.Errorf("expected user phone 081233445566, got %s", loginResp.User.Phone)
+	}
+}
+
+func TestAuthService_Login_Success_WithBothEmailAndPhone(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	regReq := auth.RegisterRequest{
+		Name:     "Both User",
+		Email:    "both@example.com",
+		Password: "password123",
+		Phone:    "081211112222",
+		Role:     domain.RoleCustomer,
+	}
+	_, _, err := svc.Register(context.Background(), regReq)
+	if err != nil {
+		t.Fatalf("registration error: %v", err)
+	}
+
+	// Login with both matching email and phone
+	loginResp, err := svc.Login(context.Background(), auth.LoginRequest{
+		Email:    "both@example.com",
+		Phone:    "081211112222",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on login with both: %v", err)
+	}
+
+	if loginResp.User.Email != "both@example.com" {
+		t.Errorf("expected user email both@example.com, got %s", loginResp.User.Email)
+	}
+}
+
+func TestAuthService_Login_MismatchedEmailAndPhone(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	regReq := auth.RegisterRequest{
+		Name:     "Mismatch User",
+		Email:    "user1@example.com",
+		Password: "password123",
+		Phone:    "081211112222",
+		Role:     domain.RoleCustomer,
+	}
+	_, _, err := svc.Register(context.Background(), regReq)
+	if err != nil {
+		t.Fatalf("registration error: %v", err)
+	}
+
+	// Login with email belonging to user1 but different phone
+	_, err = svc.Login(context.Background(), auth.LoginRequest{
+		Email:    "user1@example.com",
+		Phone:    "089999999999",
+		Password: "password123",
+	})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials on mismatched email/phone, got %v", err)
+	}
+}
+
+func TestAuthService_Login_PhoneNotFound(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	_, err := svc.Login(context.Background(), auth.LoginRequest{
+		Phone:    "089999999999",
+		Password: "password123",
+	})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials for non-existent phone, got %v", err)
+	}
+}
+
+func TestAuthService_Login_MissingBothEmailAndPhone(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	_, err := svc.Login(context.Background(), auth.LoginRequest{
+		Password: "password123",
+	})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials when both email and phone are missing, got %v", err)
+	}
+}
+
+func TestAuthService_Login_MissingPassword(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	_, err := svc.Login(context.Background(), auth.LoginRequest{
+		Phone: "0812345678",
+	})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials when password missing, got %v", err)
+	}
+}
+
+func TestAuthService_Login_InvalidPassword_WithPhone(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	regReq := auth.RegisterRequest{
+		Name:     "Phone User",
+		Email:    "phoneuser3@example.com",
+		Password: "correctpassword",
+		Phone:    "081277778888",
+		Role:     domain.RoleCustomer,
+	}
+	_, _, _ = svc.Register(context.Background(), regReq)
+
+	_, err := svc.Login(context.Background(), auth.LoginRequest{
+		Phone:    "081277778888",
+		Password: "wrongpassword",
+	})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials on wrong password with phone, got %v", err)
 	}
 }
 

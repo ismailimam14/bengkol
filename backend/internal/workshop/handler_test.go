@@ -71,6 +71,14 @@ func (m *mockAuthRepoAdapter) GetUserByEmail(ctx context.Context, email string) 
 	}
 	return u, nil
 }
+func (m *mockAuthRepoAdapter) GetUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	for _, u := range m.users {
+		if u.Phone == phone {
+			return u, nil
+		}
+	}
+	return nil, auth.ErrUserNotFound
+}
 func (m *mockAuthRepoAdapter) GetUserByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	for _, u := range m.users {
 		if u.ID == id {

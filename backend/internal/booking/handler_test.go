@@ -48,6 +48,15 @@ func setupTestAppWithBooking() (chi.Router, *mockBookingRepo, *security.JWTManag
 	return router, bRepo, jwtMgr
 }
 
+func getNextMonday() string {
+	now := time.Now().UTC()
+	daysUntilMonday := (int(time.Monday) - int(now.Weekday()) + 7) % 7
+	if daysUntilMonday == 0 {
+		daysUntilMonday = 7
+	}
+	return now.AddDate(0, 0, daysUntilMonday).Format("2006-01-02")
+}
+
 func TestHandler_Booking_GetAvailableSlots(t *testing.T) {
 	app, repo, _ := setupTestAppWithBooking()
 
@@ -60,7 +69,8 @@ func TestHandler_Booking_GetAvailableSlots(t *testing.T) {
 		IsClosed:   false,
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/workshops/"+wsID.String()+"/available-slots?date=2026-09-28", nil)
+	mondayDate := getNextMonday()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workshops/"+wsID.String()+"/available-slots?date="+mondayDate, nil)
 	rec := httptest.NewRecorder()
 
 	app.ServeHTTP(rec, req)
@@ -89,11 +99,12 @@ func TestHandler_Booking_CreateAndCancel(t *testing.T) {
 		CloseTime:  "17:00:00",
 	}
 
+	mondayDate := getNextMonday()
 	// 1. Create Booking -> 201 Created
 	createPayload := map[string]interface{}{
 		"workshop_id":  wsID.String(),
 		"service_id":   srvID.String(),
-		"booking_date": "2026-09-28",
+		"booking_date": mondayDate,
 		"booking_time": "10:00:00",
 	}
 	body, _ := json.Marshal(createPayload)
@@ -147,7 +158,7 @@ func TestHandler_Booking_ListMyBookings(t *testing.T) {
 	repo.bookings[bID] = &domain.Booking{
 		ID:          bID,
 		CustomerID:  customerID,
-		BookingDate: "2026-09-28",
+		BookingDate: getNextMonday(),
 		Status:      domain.BookingStatusConfirmed,
 		CreatedAt:   time.Now(),
 	}

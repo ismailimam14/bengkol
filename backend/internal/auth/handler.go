@@ -75,7 +75,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	authResp, err := h.service.Login(r.Context(), req)
 	if err != nil {
 		if errors.Is(err, ErrInvalidCredentials) {
-			response.Error(w, http.StatusUnauthorized, response.ErrCodeUnauthorized, "Invalid email or password")
+			response.Error(w, http.StatusUnauthorized, response.ErrCodeUnauthorized, "Invalid credentials")
 			return
 		}
 		h.logger.WithContext(r.Context()).Error("failed to login user", "error", err)
