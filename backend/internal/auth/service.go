@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid email or password")
+	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrInvalidRole        = errors.New("invalid role; must be CUSTOMER or OWNER")
 	ErrValidationFailed   = errors.New("validation failed")
 	ErrTokenExpired       = errors.New("refresh token has expired")
@@ -32,8 +32,10 @@ type RegisterRequest struct {
 
 // LoginRequest DTO
 type LoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email       string `json:"email,omitempty"`
+	Phone       string `json:"phone,omitempty"`
+	PhoneNumber string `json:"phone_number,omitempty"`
+	Password    string `json:"password"`
 }
 
 // RefreshTokenRequest DTO
@@ -153,15 +155,35 @@ func (s *authService) Register(ctx context.Context, req RegisterRequest) (*AuthR
 }
 
 func (s *authService) Login(ctx context.Context, req LoginRequest) (*AuthResponse, error) {
-	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if req.Phone == "" && req.PhoneNumber != "" {
+		req.Phone = req.PhoneNumber
+	}
 
-	if req.Email == "" || req.Password == "" {
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.Phone = strings.TrimSpace(req.Phone)
+
+	if (req.Email == "" && req.Phone == "") || req.Password == "" {
 		return nil, ErrInvalidCredentials
 	}
 
-	user, err := s.repo.GetUserByEmail(ctx, req.Email)
-	if err != nil {
-		return nil, ErrInvalidCredentials
+	var user *domain.User
+	var err error
+
+	if req.Email != "" && req.Phone != "" {
+		user, err = s.repo.GetUserByEmail(ctx, req.Email)
+		if err != nil || user.Phone != req.Phone {
+			return nil, ErrInvalidCredentials
+		}
+	} else if req.Email != "" {
+		user, err = s.repo.GetUserByEmail(ctx, req.Email)
+		if err != nil {
+			return nil, ErrInvalidCredentials
+		}
+	} else {
+		user, err = s.repo.GetUserByPhone(ctx, req.Phone)
+		if err != nil {
+			return nil, ErrInvalidCredentials
+		}
 	}
 
 	if !security.CheckPassword(req.Password, user.PasswordHash) {

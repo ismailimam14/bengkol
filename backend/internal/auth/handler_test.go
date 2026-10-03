@@ -158,6 +158,101 @@ func TestHandler_Login_InvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestHandler_Login_Success_WithPhone(t *testing.T) {
+	app, svc, _ := setupTestApp()
+
+	_, _, _ = svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Test Phone Login",
+		Email:    "testphonelogin@example.com",
+		Password: "password123",
+		Phone:    "081987654321",
+		Role:     domain.RoleCustomer,
+	})
+
+	payload := map[string]string{
+		"phone":    "081987654321",
+		"password": "password123",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandler_Login_Success_WithPhoneNumber(t *testing.T) {
+	app, svc, _ := setupTestApp()
+
+	_, _, _ = svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Test PhoneNumber Login",
+		Email:    "testphonenumberlogin@example.com",
+		Password: "password123",
+		Phone:    "081987654322",
+		Role:     domain.RoleCustomer,
+	})
+
+	payload := map[string]string{
+		"phone_number": "081987654322",
+		"password":     "password123",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandler_Login_MissingBothEmailAndPhone(t *testing.T) {
+	app, _, _ := setupTestApp()
+
+	payload := map[string]string{
+		"password": "password123",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", rec.Code)
+	}
+}
+
+func TestHandler_Login_InvalidPhone(t *testing.T) {
+	app, _, _ := setupTestApp()
+
+	payload := map[string]string{
+		"phone":    "089999999999",
+		"password": "password123",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d", rec.Code)
+	}
+}
+
 func TestHandler_GetMe_Authenticated(t *testing.T) {
 	app, svc, _ := setupTestApp()
 

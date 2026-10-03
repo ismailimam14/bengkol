@@ -231,8 +231,8 @@ func TestBookingService_GetAvailableSlots(t *testing.T) {
 		IsClosed:   false,
 	}
 
-	// Target date: 2026-09-28 (which is Monday)
-	targetDate := "2026-09-28"
+	// Target date: upcoming Monday
+	targetDate := getNextMonday()
 
 	resp, err := svc.GetAvailableSlots(context.Background(), wsID, targetDate)
 	if err != nil {
@@ -275,10 +275,11 @@ func TestBookingService_Create_Success(t *testing.T) {
 		IsClosed:   false,
 	}
 
+	mondayDate := getNextMonday()
 	req := booking.CreateBookingRequest{
 		WorkshopID:    wsID,
 		ServiceID:     srvID,
-		BookingDate:   "2026-09-28",
+		BookingDate:   mondayDate,
 		BookingTime:   "10:00:00",
 		CustomerNotes: "Mohon diperiksa filter bensin",
 	}
@@ -301,7 +302,7 @@ func TestBookingService_Create_Success(t *testing.T) {
 	}
 
 	// Verify slot was created and count is 1
-	slotKey := fmt.Sprintf("%s:2026-09-28:10:00:00", wsID)
+	slotKey := fmt.Sprintf("%s:%s:10:00:00", wsID, mondayDate)
 	slot := repo.slots[slotKey]
 	if slot == nil || slot.BookedCount != 1 {
 		t.Errorf("expected slot to have booked_count = 1")
@@ -317,7 +318,7 @@ func TestBookingService_ConcurrentBooking_Protection(t *testing.T) {
 	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
 	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 50000, DurationMinutes: 30, IsActive: true}
 
-	// Operating hour for Monday (2026-09-28)
+	// Operating hour for Monday
 	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
 		WorkshopID: wsID,
 		DayOfWeek:  1,
@@ -326,13 +327,14 @@ func TestBookingService_ConcurrentBooking_Protection(t *testing.T) {
 		IsClosed:   false,
 	}
 
+	mondayDate := getNextMonday()
 	// Pre-create slot with max_capacity = 1 and booked_count = 0
-	slotKey := fmt.Sprintf("%s:2026-09-28:14:00:00", wsID)
+	slotKey := fmt.Sprintf("%s:%s:14:00:00", wsID, mondayDate)
 	slotID := uuid.New()
 	repo.slots[slotKey] = &domain.BookingSlot{
 		ID:          slotID,
 		WorkshopID:  wsID,
-		SlotDate:    "2026-09-28",
+		SlotDate:    mondayDate,
 		StartTime:   "14:00:00",
 		EndTime:     "15:00:00",
 		MaxCapacity: 1, // Only 1 spot available!
@@ -346,7 +348,7 @@ func TestBookingService_ConcurrentBooking_Protection(t *testing.T) {
 	req := booking.CreateBookingRequest{
 		WorkshopID:  wsID,
 		ServiceID:   srvID,
-		BookingDate: "2026-09-28",
+		BookingDate: mondayDate,
 		BookingTime: "14:00:00",
 	}
 
@@ -396,10 +398,11 @@ func TestBookingService_CancelBooking_Success(t *testing.T) {
 		CloseTime:  "17:00:00",
 	}
 
+	mondayDate := getNextMonday()
 	b, _, err := svc.CreateBooking(context.Background(), customerID, booking.CreateBookingRequest{
 		WorkshopID:  wsID,
 		ServiceID:   srvID,
-		BookingDate: "2026-09-28",
+		BookingDate: mondayDate,
 		BookingTime: "09:00:00",
 	})
 	if err != nil {
@@ -419,7 +422,7 @@ func TestBookingService_CancelBooking_Success(t *testing.T) {
 	}
 
 	// Verify slot count was decremented back to 0
-	slotKey := fmt.Sprintf("%s:2026-09-28:09:00:00", wsID)
+	slotKey := fmt.Sprintf("%s:%s:09:00:00", wsID, mondayDate)
 	slot := repo.slots[slotKey]
 	if slot.BookedCount != 0 {
 		t.Errorf("expected booked_count to be 0 after cancellation, got %d", slot.BookedCount)
