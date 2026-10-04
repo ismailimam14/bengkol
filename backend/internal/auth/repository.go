@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/bengkol/backend/internal/domain"
 	"github.com/google/uuid"
@@ -12,7 +13,7 @@ import (
 
 var (
 	ErrUserNotFound         = errors.New("user not found")
-	ErrUserAlreadyExists    = errors.New("user with this email already exists")
+	ErrUserAlreadyExists    = errors.New("user already exists")
 	ErrRefreshTokenNotFound = errors.New("refresh token not found")
 )
 
@@ -44,9 +45,15 @@ func (r *postgresRepository) CreateUser(ctx context.Context, user *domain.User) 
 		INSERT INTO users (id, email, password_hash, name, phone, role, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
+	var email *string
+	if strings.TrimSpace(user.Email) != "" {
+		trimmed := strings.ToLower(strings.TrimSpace(user.Email))
+		email = &trimmed
+	}
+
 	_, err := r.db.ExecContext(ctx, query,
 		user.ID,
-		user.Email,
+		email,
 		user.PasswordHash,
 		user.Name,
 		user.Phone,
@@ -61,13 +68,18 @@ func (r *postgresRepository) CreateUser(ctx context.Context, user *domain.User) 
 }
 
 func (r *postgresRepository) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(email))
+	if trimmed == "" {
+		return nil, ErrUserNotFound
+	}
+
 	query := `
-		SELECT id, email, password_hash, name, phone, role, created_at, updated_at
+		SELECT id, COALESCE(email, ''), password_hash, name, phone, role, created_at, updated_at
 		FROM users
-		WHERE LOWER(email) = LOWER($1)
+		WHERE email IS NOT NULL AND LOWER(email) = LOWER($1)
 	`
 	var u domain.User
-	err := r.db.QueryRowContext(ctx, query, email).Scan(
+	err := r.db.QueryRowContext(ctx, query, trimmed).Scan(
 		&u.ID,
 		&u.Email,
 		&u.PasswordHash,
@@ -87,13 +99,18 @@ func (r *postgresRepository) GetUserByEmail(ctx context.Context, email string) (
 }
 
 func (r *postgresRepository) GetUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return nil, ErrUserNotFound
+	}
+
 	query := `
-		SELECT id, email, password_hash, name, phone, role, created_at, updated_at
+		SELECT id, COALESCE(email, ''), password_hash, name, phone, role, created_at, updated_at
 		FROM users
 		WHERE phone = $1
 	`
 	var u domain.User
-	err := r.db.QueryRowContext(ctx, query, phone).Scan(
+	err := r.db.QueryRowContext(ctx, query, trimmed).Scan(
 		&u.ID,
 		&u.Email,
 		&u.PasswordHash,
@@ -114,7 +131,7 @@ func (r *postgresRepository) GetUserByPhone(ctx context.Context, phone string) (
 
 func (r *postgresRepository) GetUserByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
 	query := `
-		SELECT id, email, password_hash, name, phone, role, created_at, updated_at
+		SELECT id, COALESCE(email, ''), password_hash, name, phone, role, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`

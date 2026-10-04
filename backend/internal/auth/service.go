@@ -23,11 +23,12 @@ var (
 
 // RegisterRequest DTO
 type RegisterRequest struct {
-	Name     string          `json:"name"`
-	Email    string          `json:"email"`
-	Password string          `json:"password"`
-	Phone    string          `json:"phone"`
-	Role     domain.UserRole `json:"role"`
+	Name        string          `json:"name"`
+	Email       string          `json:"email,omitempty"`
+	Password    string          `json:"password"`
+	Phone       string          `json:"phone,omitempty"`
+	PhoneNumber string          `json:"phone_number,omitempty"`
+	Role        domain.UserRole `json:"role"`
 }
 
 // LoginRequest DTO
@@ -74,14 +75,19 @@ func NewService(repo Repository, jwtMgr *security.JWTManager, log *logger.Logger
 }
 
 func (s *authService) Register(ctx context.Context, req RegisterRequest) (*AuthResponse, map[string]string, error) {
+	if req.Phone == "" && req.PhoneNumber != "" {
+		req.Phone = req.PhoneNumber
+	}
+
 	v := validator.New()
 	req.Name = strings.TrimSpace(req.Name)
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	req.Phone = strings.TrimSpace(req.Phone)
 
 	v.Required("name", req.Name)
-	v.Required("email", req.Email)
-	v.Email("email", req.Email)
+	if req.Email != "" {
+		v.Email("email", req.Email)
+	}
 	v.Required("password", req.Password)
 	v.MinLength("password", req.Password, 8)
 	v.Required("phone", req.Phone)
@@ -98,10 +104,29 @@ func (s *authService) Register(ctx context.Context, req RegisterRequest) (*AuthR
 		return nil, v.Errors, ErrValidationFailed
 	}
 
-	// Check if user email already exists
-	existing, err := s.repo.GetUserByEmail(ctx, req.Email)
-	if err == nil && existing != nil {
-		v.AddError("email", "email is already registered")
+	hasDuplicate := false
+
+	// Check if user phone already exists
+	existingPhone, err := s.repo.GetUserByPhone(ctx, req.Phone)
+	if err == nil && existingPhone != nil {
+		v.AddError("phone", "phone number is already registered")
+		hasDuplicate = true
+	} else if err != nil && !errors.Is(err, ErrUserNotFound) {
+		return nil, nil, err
+	}
+
+	// Check if user email already exists (if email is provided)
+	if req.Email != "" {
+		existingEmail, err := s.repo.GetUserByEmail(ctx, req.Email)
+		if err == nil && existingEmail != nil {
+			v.AddError("email", "email is already registered")
+			hasDuplicate = true
+		} else if err != nil && !errors.Is(err, ErrUserNotFound) {
+			return nil, nil, err
+		}
+	}
+
+	if hasDuplicate {
 		return nil, v.Errors, ErrUserAlreadyExists
 	}
 

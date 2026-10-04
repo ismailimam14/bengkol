@@ -440,7 +440,7 @@ func (r *postgresHistoryRepository) GetBookingByID(ctx context.Context, bookingI
 		SELECT 
 			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
 			b.booking_date, b.booking_time, b.status, b.customer_notes, b.created_at, b.updated_at,
-			u.id, u.name, u.phone, u.email,
+			u.id, u.name, u.phone, COALESCE(u.email, ''),
 			s.id, s.name, s.price, s.duration_minutes,
 			w.id, w.name, w.address, w.phone, w.owner_id
 		FROM bookings b

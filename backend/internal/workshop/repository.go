@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrWorkshopNotFound = errors.New("workshop not found")
+	ErrPhotoNotFound    = errors.New("photo not found")
 )
 
 // WorkshopFilter contains criteria for searching workshops.
@@ -30,7 +31,7 @@ type NearbyParams struct {
 	Offset       int
 }
 
-// Repository defines data access operations for Workshops and Operating Hours.
+// Repository defines data access operations for Workshops, Photos, and Operating Hours.
 type Repository interface {
 	Create(ctx context.Context, w *domain.Workshop) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Workshop, error)
@@ -40,6 +41,10 @@ type Repository interface {
 	Update(ctx context.Context, w *domain.Workshop) error
 	GetOperatingHours(ctx context.Context, workshopID uuid.UUID) ([]domain.OperatingHour, error)
 	UpsertOperatingHours(ctx context.Context, workshopID uuid.UUID, hours []domain.OperatingHour) error
+	SavePhoto(ctx context.Context, photo *domain.WorkshopPhoto) error
+	GetPhotoByID(ctx context.Context, id uuid.UUID) (*domain.WorkshopPhoto, error)
+	GetPhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopPhoto, error)
+	DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error
 }
 
 type postgresRepository struct {
@@ -52,15 +57,18 @@ func NewRepository(db *sql.DB) Repository {
 }
 
 func (r *postgresRepository) Create(ctx context.Context, w *domain.Workshop) error {
+	if w.Photos == nil {
+		w.Photos = []string{}
+	}
 	query := `
 		INSERT INTO workshops (
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9, $10, $11,
-			$12, $13
+			$6, $7, $8, $9, $10, $11, $12,
+			$13, $14
 		)
 	`
 	_, err := r.db.ExecContext(ctx, query,
@@ -72,6 +80,7 @@ func (r *postgresRepository) Create(ctx context.Context, w *domain.Workshop) err
 		w.Latitude,
 		w.Longitude,
 		w.Phone,
+		w.Photos,
 		w.Rating,
 		w.ReviewCount,
 		w.Status,
@@ -88,7 +97,7 @@ func (r *postgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 	query := `
 		SELECT 
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE id = $1
@@ -105,6 +114,7 @@ func (r *postgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 		&w.Latitude,
 		&w.Longitude,
 		&w.Phone,
+		&w.Photos,
 		&w.Rating,
 		&w.ReviewCount,
 		&w.Status,
@@ -120,6 +130,9 @@ func (r *postgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 	if desc.Valid {
 		w.Description = desc.String
 	}
+	if w.Photos == nil {
+		w.Photos = []string{}
+	}
 	return &w, nil
 }
 
@@ -127,7 +140,7 @@ func (r *postgresRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID
 	query := `
 		SELECT 
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE owner_id = $1
@@ -152,6 +165,7 @@ func (r *postgresRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID
 			&w.Latitude,
 			&w.Longitude,
 			&w.Phone,
+			&w.Photos,
 			&w.Rating,
 			&w.ReviewCount,
 			&w.Status,
@@ -162,6 +176,9 @@ func (r *postgresRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID
 		}
 		if desc.Valid {
 			w.Description = desc.String
+		}
+		if w.Photos == nil {
+			w.Photos = []string{}
 		}
 		list = append(list, w)
 	}
@@ -192,7 +209,7 @@ func (r *postgresRepository) List(ctx context.Context, pagination domain.Paginat
 	selectQuery := `
 		SELECT 
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE 1=1
@@ -233,6 +250,7 @@ func (r *postgresRepository) List(ctx context.Context, pagination domain.Paginat
 			&w.Latitude,
 			&w.Longitude,
 			&w.Phone,
+			&w.Photos,
 			&w.Rating,
 			&w.ReviewCount,
 			&w.Status,
@@ -243,6 +261,9 @@ func (r *postgresRepository) List(ctx context.Context, pagination domain.Paginat
 		}
 		if desc.Valid {
 			w.Description = desc.String
+		}
+		if w.Photos == nil {
+			w.Photos = []string{}
 		}
 		list = append(list, w)
 	}
@@ -256,7 +277,7 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 			id, owner_id, name, description, address,
 			latitude, longitude,
 			ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_meters,
-			phone, rating, review_count, status,
+			phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE status = 'ACTIVE'
@@ -291,6 +312,7 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 			&w.Longitude,
 			&dist,
 			&w.Phone,
+			&w.Photos,
 			&w.Rating,
 			&w.ReviewCount,
 			&w.Status,
@@ -302,6 +324,9 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 		if desc.Valid {
 			w.Description = desc.String
 		}
+		if w.Photos == nil {
+			w.Photos = []string{}
+		}
 		w.DistanceMeters = &dist
 		list = append(list, w)
 	}
@@ -309,6 +334,9 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 }
 
 func (r *postgresRepository) Update(ctx context.Context, w *domain.Workshop) error {
+	if w.Photos == nil {
+		w.Photos = []string{}
+	}
 	query := `
 		UPDATE workshops
 		SET 
@@ -318,9 +346,10 @@ func (r *postgresRepository) Update(ctx context.Context, w *domain.Workshop) err
 			latitude = $4,
 			longitude = $5,
 			phone = $6,
-			status = $7,
-			updated_at = $8
-		WHERE id = $9
+			photos = $7,
+			status = $8,
+			updated_at = $9
+		WHERE id = $10
 	`
 	res, err := r.db.ExecContext(ctx, query,
 		w.Name,
@@ -329,6 +358,7 @@ func (r *postgresRepository) Update(ctx context.Context, w *domain.Workshop) err
 		w.Latitude,
 		w.Longitude,
 		w.Phone,
+		w.Photos,
 		w.Status,
 		w.UpdatedAt,
 		w.ID,
@@ -415,3 +445,90 @@ func (r *postgresRepository) UpsertOperatingHours(ctx context.Context, workshopI
 
 	return tx.Commit()
 }
+
+func (r *postgresRepository) SavePhoto(ctx context.Context, p *domain.WorkshopPhoto) error {
+	query := `
+		INSERT INTO workshop_photos (
+			id, workshop_id, data, content_type, filename, byte_size, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7
+		)
+	`
+	_, err := r.db.ExecContext(ctx, query,
+		p.ID,
+		p.WorkshopID,
+		p.Data,
+		p.ContentType,
+		p.Filename,
+		p.ByteSize,
+		p.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save workshop photo: %w", err)
+	}
+	return nil
+}
+
+func (r *postgresRepository) GetPhotoByID(ctx context.Context, id uuid.UUID) (*domain.WorkshopPhoto, error) {
+	query := `
+		SELECT id, workshop_id, data, content_type, filename, byte_size, created_at
+		FROM workshop_photos
+		WHERE id = $1
+	`
+	var p domain.WorkshopPhoto
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&p.ID,
+		&p.WorkshopID,
+		&p.Data,
+		&p.ContentType,
+		&p.Filename,
+		&p.ByteSize,
+		&p.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrPhotoNotFound
+		}
+		return nil, fmt.Errorf("failed to get workshop photo: %w", err)
+	}
+	return &p, nil
+}
+
+func (r *postgresRepository) GetPhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopPhoto, error) {
+	query := `
+		SELECT id, workshop_id, data, content_type, filename, byte_size, created_at
+		FROM workshop_photos
+		WHERE workshop_id = $1
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, workshopID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query workshop photos: %w", err)
+	}
+	defer rows.Close()
+
+	var photos []domain.WorkshopPhoto
+	for rows.Next() {
+		var p domain.WorkshopPhoto
+		if err := rows.Scan(
+			&p.ID,
+			&p.WorkshopID,
+			&p.Data,
+			&p.ContentType,
+			&p.Filename,
+			&p.ByteSize,
+			&p.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan workshop photo: %w", err)
+		}
+		photos = append(photos, p)
+	}
+	return photos, rows.Err()
+}
+
+func (r *postgresRepository) DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error {
+	query := `DELETE FROM workshop_photos WHERE workshop_id = $1`
+	_, err := r.db.ExecContext(ctx, query, workshopID)
+	return err
+}
+

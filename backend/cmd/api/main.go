@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -116,6 +117,7 @@ func main() {
 	docsHandler := handler.NewDocsHandler()
 	authHandler := auth.NewHandler(authService, log)
 	workshopHandler := workshop.NewHandler(workshopService, log)
+	workshopHandler.SetUploadDir(filepath.Join(cfg.UploadDir, "workshops"))
 	serviceHandler := service.NewHandler(serviceService, log)
 	sparePartHandler := sparepart.NewHandler(sparePartService, log)
 	bookingHandler := booking.NewHandler(bookingService, log)

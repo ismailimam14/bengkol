@@ -211,7 +211,7 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 		SELECT 
 			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
 			b.booking_date, b.booking_time, b.status, b.customer_notes, b.created_at, b.updated_at,
-			u.id, u.name, u.email, u.phone,
+			u.id, u.name, COALESCE(u.email, ''), u.phone,
 			w.id, w.name, w.address, w.phone,
 			s.id, s.name, s.price, s.duration_minutes
 		FROM bookings b
@@ -384,7 +384,7 @@ func (r *postgresRepository) ListByWorkshop(ctx context.Context, workshopID uuid
 		SELECT 
 			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
 			b.booking_date, b.booking_time, b.status, b.customer_notes, b.created_at, b.updated_at,
-			u.id, u.name, u.email, u.phone,
+			u.id, u.name, COALESCE(u.email, ''), u.phone,
 			s.id, s.name, s.price, s.duration_minutes
 		FROM bookings b
 		JOIN users u ON b.customer_id = u.id

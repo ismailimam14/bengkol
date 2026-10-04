@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,15 +63,19 @@ type mockAuthRepoAdapter struct {
 }
 
 func (m *mockAuthRepoAdapter) CreateUser(ctx context.Context, u *domain.User) error {
-	m.users[u.Email] = u
+	m.users[u.ID.String()] = u
 	return nil
 }
 func (m *mockAuthRepoAdapter) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	u, ok := m.users[email]
-	if !ok {
+	if email == "" {
 		return nil, auth.ErrUserNotFound
 	}
-	return u, nil
+	for _, u := range m.users {
+		if strings.EqualFold(u.Email, email) {
+			return u, nil
+		}
+	}
+	return nil, auth.ErrUserNotFound
 }
 func (m *mockAuthRepoAdapter) GetUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
 	for _, u := range m.users {
@@ -149,6 +155,11 @@ func TestHandler_Workshop_Create_RoleAuthorization(t *testing.T) {
 		"latitude":  -6.2,
 		"longitude": 106.8,
 		"phone":     "0811223344",
+		"photos": []string{
+			"https://example.com/1.jpg",
+			"https://example.com/2.jpg",
+			"https://example.com/3.jpg",
+		},
 	}
 	body, _ := json.Marshal(createPayload)
 
@@ -172,6 +183,67 @@ func TestHandler_Workshop_Create_RoleAuthorization(t *testing.T) {
 	app.ServeHTTP(recCustomer, reqCustomer)
 	if recCustomer.Code != http.StatusForbidden {
 		t.Fatalf("expected status 403 for CUSTOMER, got %d", recCustomer.Code)
+	}
+}
+
+func TestHandler_Workshop_Create_MinPhotosValidation(t *testing.T) {
+	app, _, jwtMgr := setupTestAppWithWorkshop()
+
+	owner := &domain.User{ID: uuid.New(), Email: "owner@bengkol.com", Role: domain.RoleOwner}
+	ownerTokens, _, _ := jwtMgr.GenerateTokenPair(owner)
+
+	// 1. Less than 3 photos -> 422 Unprocessable Entity
+	badPayload := map[string]interface{}{
+		"name":      "New Workshop",
+		"address":   "Jl. Pemuda No. 1",
+		"latitude":  -6.2,
+		"longitude": 106.8,
+		"phone":     "0811223344",
+		"photos":    []string{"https://example.com/1.jpg", "https://example.com/2.jpg"},
+	}
+	badBody, _ := json.Marshal(badPayload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workshops", bytes.NewReader(badBody))
+	req.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status 422 for less than 3 photos, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var errResp response.Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if errResp.Error.Code != response.ErrCodeValidationFailed {
+		t.Errorf("expected error code %s, got %s", response.ErrCodeValidationFailed, errResp.Error.Code)
+	}
+
+	// 2. 3 valid photos -> 201 Created
+	goodPayload := map[string]interface{}{
+		"name":      "New Workshop",
+		"address":   "Jl. Pemuda No. 1",
+		"latitude":  -6.2,
+		"longitude": 106.8,
+		"phone":     "0811223344",
+		"photos": []string{
+			"https://example.com/1.jpg",
+			"https://example.com/2.jpg",
+			"https://example.com/3.jpg",
+		},
+	}
+	goodBody, _ := json.Marshal(goodPayload)
+
+	reqGood := httptest.NewRequest(http.MethodPost, "/api/v1/workshops", bytes.NewReader(goodBody))
+	reqGood.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	reqGood.Header.Set("Content-Type", "application/json")
+	recGood := httptest.NewRecorder()
+
+	app.ServeHTTP(recGood, reqGood)
+	if recGood.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", recGood.Code, recGood.Body.String())
 	}
 }
 
@@ -248,3 +320,216 @@ func TestHandler_Workshop_GetByID(t *testing.T) {
 		t.Fatalf("expected status 200, got %d", rec.Code)
 	}
 }
+
+func TestHandler_Workshop_Create_MultipartBinaryPhotos(t *testing.T) {
+	app, _, jwtMgr := setupTestAppWithWorkshop()
+
+	owner := &domain.User{ID: uuid.New(), Email: "owner-multipart@bengkol.com", Role: domain.RoleOwner}
+	ownerTokens, _, _ := jwtMgr.GenerateTokenPair(owner)
+
+	// 1. Success with 3 binary files
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("name", "Bengkel Foto Biner")
+	_ = writer.WriteField("address", "Jl. Biner No. 10")
+	_ = writer.WriteField("phone", "081299998888")
+	_ = writer.WriteField("latitude", "-6.2088")
+	_ = writer.WriteField("longitude", "106.8456")
+
+	// Append 3 binary photo files
+	files := []struct {
+		name string
+		data []byte
+	}{
+		{"front.jpg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46}},
+		{"inside.png", []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}},
+		{"sign.webp", []byte{0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50}},
+	}
+	for _, f := range files {
+		part, err := writer.CreateFormFile("photos", f.name)
+		if err != nil {
+			t.Fatalf("failed to create form file: %v", err)
+		}
+		if _, err := part.Write(f.data); err != nil {
+			t.Fatalf("failed to write form file data: %v", err)
+		}
+	}
+	_ = writer.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workshops", body)
+	req.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201 for multipart upload, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data domain.Workshop `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response JSON: %v", err)
+	}
+	if len(resp.Data.Photos) != 3 {
+		t.Fatalf("expected 3 photos in workshop response, got %d: %+v", len(resp.Data.Photos), resp.Data.Photos)
+	}
+	for i, photo := range resp.Data.Photos {
+		if !strings.HasPrefix(photo, "/api/v1/workshops/") || !strings.Contains(photo, "/photos/") {
+			t.Errorf("photo[%d] = %s does not have expected database photo URL format", i, photo)
+		}
+
+		// Retrieve binary photo from database via GET endpoint
+		getReq := httptest.NewRequest(http.MethodGet, photo, nil)
+		getRec := httptest.NewRecorder()
+		app.ServeHTTP(getRec, getReq)
+		if getRec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 retrieving photo %s, got %d", photo, getRec.Code)
+		}
+		if !bytes.Equal(getRec.Body.Bytes(), files[i].data) {
+			t.Errorf("photo[%d] returned binary data mismatch", i)
+		}
+	}
+
+	// 2. Failure when fewer than 3 photos provided
+	badBody := &bytes.Buffer{}
+	badWriter := multipart.NewWriter(badBody)
+	_ = badWriter.WriteField("name", "Bengkel Foto Kurang")
+	_ = badWriter.WriteField("address", "Jl. Kurang No. 1")
+	_ = badWriter.WriteField("phone", "081299997777")
+	_ = badWriter.WriteField("latitude", "-6.2088")
+	_ = badWriter.WriteField("longitude", "106.8456")
+
+	// Only 2 photos
+	for _, f := range files[:2] {
+		part, _ := badWriter.CreateFormFile("photos", f.name)
+		_, _ = part.Write(f.data)
+	}
+	_ = badWriter.Close()
+
+	reqBad := httptest.NewRequest(http.MethodPost, "/api/v1/workshops", badBody)
+	reqBad.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	reqBad.Header.Set("Content-Type", badWriter.FormDataContentType())
+	recBad := httptest.NewRecorder()
+
+	app.ServeHTTP(recBad, reqBad)
+	if recBad.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status 422 for <3 photos multipart, got %d: %s", recBad.Code, recBad.Body.String())
+	}
+
+	// 3. Failure on invalid file format
+	invBody := &bytes.Buffer{}
+	invWriter := multipart.NewWriter(invBody)
+	_ = invWriter.WriteField("name", "Bengkel Format Salah")
+	_ = invWriter.WriteField("address", "Jl. Salah No. 1")
+	_ = invWriter.WriteField("phone", "081299996666")
+	_ = invWriter.WriteField("latitude", "-6.2088")
+	_ = invWriter.WriteField("longitude", "106.8456")
+
+	part1, _ := invWriter.CreateFormFile("photos", "file1.txt")
+	_, _ = part1.Write([]byte("not an image"))
+	part2, _ := invWriter.CreateFormFile("photos", "file2.jpg")
+	_, _ = part2.Write(files[0].data)
+	part3, _ := invWriter.CreateFormFile("photos", "file3.jpg")
+	_, _ = part3.Write(files[0].data)
+	_ = invWriter.Close()
+
+	reqInv := httptest.NewRequest(http.MethodPost, "/api/v1/workshops", invBody)
+	reqInv.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	reqInv.Header.Set("Content-Type", invWriter.FormDataContentType())
+	recInv := httptest.NewRecorder()
+
+	app.ServeHTTP(recInv, reqInv)
+	if recInv.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status 422 for invalid file format, got %d: %s", recInv.Code, recInv.Body.String())
+	}
+}
+
+func TestHandler_Workshop_Update_MultipartBinaryPhotos(t *testing.T) {
+	app, repo, jwtMgr := setupTestAppWithWorkshop()
+
+	owner := &domain.User{ID: uuid.New(), Email: "owner-update@bengkol.com", Role: domain.RoleOwner}
+	ownerTokens, _, _ := jwtMgr.GenerateTokenPair(owner)
+
+	wsID := uuid.New()
+	repo.workshops[wsID] = &domain.Workshop{
+		ID:        wsID,
+		OwnerID:   owner.ID,
+		Name:      "Existing Workshop",
+		Address:   "Jl. Lama No. 5",
+		Phone:     "0811223344",
+		Photos:    []string{"https://example.com/old1.jpg", "https://example.com/old2.jpg", "https://example.com/old3.jpg"},
+		Status:    domain.WorkshopStatusActive,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	_ = writer.WriteField("name", "Updated Workshop Name")
+
+	files := []struct {
+		name string
+		data []byte
+	}{
+		{"new1.jpg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}},
+		{"new2.png", []byte{0x89, 0x50, 0x4E, 0x47}},
+		{"new3.webp", []byte{0x52, 0x49, 0x46, 0x46}},
+	}
+	for _, f := range files {
+		part, _ := writer.CreateFormFile("photos", f.name)
+		_, _ = part.Write(f.data)
+	}
+	_ = writer.Close()
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/workshops/"+wsID.String(), body)
+	req.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for multipart update, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data domain.Workshop `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(resp.Data.Photos) != 3 {
+		t.Fatalf("expected 3 updated photos, got %d: %+v", len(resp.Data.Photos), resp.Data.Photos)
+	}
+	for i, photo := range resp.Data.Photos {
+		if !strings.HasPrefix(photo, "/api/v1/workshops/") || !strings.Contains(photo, "/photos/") {
+			t.Errorf("photo[%d] = %s does not have expected database photo URL format", i, photo)
+		}
+
+		// Retrieve binary photo from database via GET endpoint
+		getReq := httptest.NewRequest(http.MethodGet, photo, nil)
+		getRec := httptest.NewRecorder()
+		app.ServeHTTP(getRec, getReq)
+		if getRec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 retrieving updated photo %s, got %d", photo, getRec.Code)
+		}
+		if !bytes.Equal(getRec.Body.Bytes(), files[i].data) {
+			t.Errorf("photo[%d] returned binary data mismatch", i)
+		}
+	}
+}
+
+func TestHandler_Workshop_GetPhoto_NotFound(t *testing.T) {
+	app, _, _ := setupTestAppWithWorkshop()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workshops/"+uuid.New().String()+"/photos/"+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 for non-existent photo, got %d", rec.Code)
+	}
+}
+
+

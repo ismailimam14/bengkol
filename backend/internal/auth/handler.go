@@ -53,7 +53,13 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, ErrUserAlreadyExists) {
-			response.ErrorWithDetails(w, http.StatusConflict, response.ErrCodeConflict, "Email is already in use", validationErrors)
+			msg := "Email or phone number is already in use"
+			if _, emailExists := validationErrors["email"]; emailExists && len(validationErrors) == 1 {
+				msg = "Email is already in use"
+			} else if _, phoneExists := validationErrors["phone"]; phoneExists && len(validationErrors) == 1 {
+				msg = "Phone number is already in use"
+			}
+			response.ErrorWithDetails(w, http.StatusConflict, response.ErrCodeConflict, msg, validationErrors)
 			return
 		}
 		h.logger.WithContext(r.Context()).Error("failed to register user", "error", err)

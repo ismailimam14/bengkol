@@ -3,6 +3,7 @@ package workshop
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -19,6 +20,13 @@ var (
 	ErrInvalidCoordinates = errors.New("invalid latitude or longitude coordinates")
 )
 
+// RawPhotoInput holds binary photo data uploaded by clients.
+type RawPhotoInput struct {
+	Data        []byte
+	ContentType string
+	Filename    string
+}
+
 // CreateWorkshopRequest DTO
 type CreateWorkshopRequest struct {
 	Name           string               `json:"name"`
@@ -27,6 +35,8 @@ type CreateWorkshopRequest struct {
 	Latitude       float64              `json:"latitude"`
 	Longitude      float64              `json:"longitude"`
 	Phone          string               `json:"phone"`
+	Photos         []string             `json:"photos"`
+	RawPhotos      []RawPhotoInput      `json:"-"`
 	OperatingHours []OperatingHourInput `json:"operating_hours,omitempty"`
 }
 
@@ -38,6 +48,8 @@ type UpdateWorkshopRequest struct {
 	Latitude    *float64               `json:"latitude,omitempty"`
 	Longitude   *float64               `json:"longitude,omitempty"`
 	Phone       *string                `json:"phone,omitempty"`
+	Photos      *[]string              `json:"photos,omitempty"`
+	RawPhotos   []RawPhotoInput        `json:"-"`
 	Status      *domain.WorkshopStatus `json:"status,omitempty"`
 }
 
@@ -59,6 +71,7 @@ type Service interface {
 	UpdateWorkshop(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, req UpdateWorkshopRequest) (*domain.Workshop, map[string]string, error)
 	GetOperatingHours(ctx context.Context, workshopID uuid.UUID) ([]domain.OperatingHour, error)
 	UpdateOperatingHours(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, hours []OperatingHourInput) ([]domain.OperatingHour, map[string]string, error)
+	GetPhoto(ctx context.Context, photoID uuid.UUID) (*domain.WorkshopPhoto, error)
 }
 
 type workshopService struct {
@@ -84,6 +97,18 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 	v.Required("address", req.Address)
 	v.Required("phone", req.Phone)
 
+	var validPhotos []string
+	for _, p := range req.Photos {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			validPhotos = append(validPhotos, trimmed)
+		}
+	}
+	totalPhotos := len(validPhotos) + len(req.RawPhotos)
+	if totalPhotos < 3 {
+		v.AddError("photos", "at least 3 photos are required")
+	}
+
 	if req.Latitude < -90 || req.Latitude > 90 {
 		v.AddError("latitude", "latitude must be between -90 and 90 degrees")
 	}
@@ -93,6 +118,10 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 
 	if !v.IsValid() {
 		return nil, v.Errors, ErrValidationFailed
+	}
+
+	if validPhotos == nil {
+		validPhotos = []string{}
 	}
 
 	now := time.Now().UTC()
@@ -105,6 +134,7 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 		Latitude:    req.Latitude,
 		Longitude:   req.Longitude,
 		Phone:       req.Phone,
+		Photos:      validPhotos,
 		Rating:      0.0,
 		ReviewCount: 0,
 		Status:      domain.WorkshopStatusActive,
@@ -115,6 +145,28 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 	if err := s.repo.Create(ctx, ws); err != nil {
 		s.logger.WithContext(ctx).Error("failed to create workshop", "error", err)
 		return nil, nil, err
+	}
+
+	// If raw binary photos uploaded, store them directly in the database
+	if len(req.RawPhotos) > 0 {
+		for _, raw := range req.RawPhotos {
+			photoID := uuid.New()
+			p := &domain.WorkshopPhoto{
+				ID:          photoID,
+				WorkshopID:  ws.ID,
+				Data:        raw.Data,
+				ContentType: raw.ContentType,
+				Filename:    raw.Filename,
+				ByteSize:    len(raw.Data),
+				CreatedAt:   now,
+			}
+			if err := s.repo.SavePhoto(ctx, p); err != nil {
+				s.logger.WithContext(ctx).Error("failed to save workshop photo to database", "workshop_id", ws.ID, "error", err)
+				continue
+			}
+			ws.Photos = append(ws.Photos, fmt.Sprintf("/api/v1/workshops/%s/photos/%s", ws.ID, photoID))
+		}
+		_ = s.repo.Update(ctx, ws)
 	}
 
 	// If initial operating hours provided, save them
@@ -149,6 +201,10 @@ func (s *workshopService) GetWorkshopByID(ctx context.Context, id uuid.UUID) (*d
 		return nil, err
 	}
 
+	if ws.Photos == nil {
+		ws.Photos = []string{}
+	}
+
 	hours, err := s.repo.GetOperatingHours(ctx, id)
 	if err == nil {
 		ws.OperatingHours = hours
@@ -163,6 +219,12 @@ func (s *workshopService) ListWorkshops(ctx context.Context, pagination domain.P
 	list, total, err := s.repo.List(ctx, pagination, filter)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	for i := range list {
+		if list[i].Photos == nil {
+			list[i].Photos = []string{}
+		}
 	}
 
 	totalPages := int(total) / pagination.PageSize
@@ -198,11 +260,33 @@ func (s *workshopService) FindNearbyWorkshops(ctx context.Context, params Nearby
 		params.Limit = 50
 	}
 
-	return s.repo.FindNearby(ctx, params)
+	list, err := s.repo.FindNearby(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range list {
+		if list[i].Photos == nil {
+			list[i].Photos = []string{}
+		}
+	}
+
+	return list, nil
 }
 
 func (s *workshopService) GetMyWorkshops(ctx context.Context, ownerID uuid.UUID) ([]domain.Workshop, error) {
-	return s.repo.GetByOwnerID(ctx, ownerID)
+	list, err := s.repo.GetByOwnerID(ctx, ownerID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range list {
+		if list[i].Photos == nil {
+			list[i].Photos = []string{}
+		}
+	}
+
+	return list, nil
 }
 
 func (s *workshopService) UpdateWorkshop(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, req UpdateWorkshopRequest) (*domain.Workshop, map[string]string, error) {
@@ -248,12 +332,53 @@ func (s *workshopService) UpdateWorkshop(ctx context.Context, workshopID uuid.UU
 		}
 		ws.Longitude = *req.Longitude
 	}
+	if req.Photos != nil || len(req.RawPhotos) > 0 {
+		var validPhotos []string
+		if req.Photos != nil {
+			for _, p := range *req.Photos {
+				trimmed := strings.TrimSpace(p)
+				if trimmed != "" {
+					validPhotos = append(validPhotos, trimmed)
+				}
+			}
+		}
+		totalPhotos := len(validPhotos) + len(req.RawPhotos)
+		if totalPhotos < 3 {
+			v.AddError("photos", "at least 3 photos are required")
+		} else {
+			if len(req.RawPhotos) > 0 {
+				now := time.Now().UTC()
+				for _, raw := range req.RawPhotos {
+					photoID := uuid.New()
+					p := &domain.WorkshopPhoto{
+						ID:          photoID,
+						WorkshopID:  ws.ID,
+						Data:        raw.Data,
+						ContentType: raw.ContentType,
+						Filename:    raw.Filename,
+						ByteSize:    len(raw.Data),
+						CreatedAt:   now,
+					}
+					if err := s.repo.SavePhoto(ctx, p); err != nil {
+						s.logger.WithContext(ctx).Error("failed to save workshop photo to database", "workshop_id", ws.ID, "error", err)
+						continue
+					}
+					validPhotos = append(validPhotos, fmt.Sprintf("/api/v1/workshops/%s/photos/%s", ws.ID, photoID))
+				}
+			}
+			ws.Photos = validPhotos
+		}
+	}
 	if req.Status != nil {
 		ws.Status = *req.Status
 	}
 
 	if !v.IsValid() {
 		return nil, v.Errors, ErrValidationFailed
+	}
+
+	if ws.Photos == nil {
+		ws.Photos = []string{}
 	}
 
 	ws.UpdatedAt = time.Now().UTC()
@@ -263,6 +388,10 @@ func (s *workshopService) UpdateWorkshop(ctx context.Context, workshopID uuid.UU
 	}
 
 	return ws, nil, nil
+}
+
+func (s *workshopService) GetPhoto(ctx context.Context, photoID uuid.UUID) (*domain.WorkshopPhoto, error) {
+	return s.repo.GetPhotoByID(ctx, photoID)
 }
 
 func (s *workshopService) GetOperatingHours(ctx context.Context, workshopID uuid.UUID) ([]domain.OperatingHour, error) {

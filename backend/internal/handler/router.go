@@ -107,6 +107,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			v1.Get("/workshops/nearby", cfg.WorkshopHandler.FindNearby)
 			v1.Get("/workshops/{id}", cfg.WorkshopHandler.GetByID)
 			v1.Get("/workshops/{id}/operating-hours", cfg.WorkshopHandler.GetOperatingHours)
+			v1.Get("/workshops/{id}/photos/{photoID}", cfg.WorkshopHandler.GetPhoto)
+			v1.Get("/workshops/photos/{photoID}", cfg.WorkshopHandler.GetPhoto)
 
 			// Protected workshop management endpoints
 			v1.Group(func(protected chi.Router) {
