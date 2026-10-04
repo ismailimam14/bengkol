@@ -110,6 +110,114 @@ func TestHandler_Register_ValidationError(t *testing.T) {
 	}
 }
 
+func TestHandler_Register_Success_WithoutEmail(t *testing.T) {
+	app, _, _ := setupTestApp()
+
+	payload := map[string]interface{}{
+		"name":     "No Email Customer",
+		"password": "strongPassword123",
+		"phone":    "089988776655",
+		"role":     "CUSTOMER",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp response.Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if !resp.Success {
+		t.Errorf("expected response.success to be true")
+	}
+}
+
+func TestHandler_Register_MissingPhone(t *testing.T) {
+	app, _, _ := setupTestApp()
+
+	payload := map[string]interface{}{
+		"name":     "Customer Without Phone",
+		"email":    "cust@example.com",
+		"password": "strongPassword123",
+		"phone":    "",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status 422, got %d", rec.Code)
+	}
+
+	var resp response.Response
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	if resp.Error == nil || resp.Error.Code != response.ErrCodeValidationFailed {
+		t.Fatalf("expected VALIDATION_FAILED, got %+v", resp.Error)
+	}
+	if _, ok := resp.Error.Details["phone"]; !ok {
+		t.Errorf("expected validation error on phone")
+	}
+}
+
+func TestHandler_Register_DuplicatePhone(t *testing.T) {
+	app, _, _ := setupTestApp()
+
+	payload1 := map[string]interface{}{
+		"name":     "First User",
+		"email":    "first@example.com",
+		"password": "strongPassword123",
+		"phone":    "081122334455",
+	}
+	body1, _ := json.Marshal(payload1)
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+	app.ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("expected status 201 on first registration, got %d", rec1.Code)
+	}
+
+	// Register second user with same phone but different email
+	payload2 := map[string]interface{}{
+		"name":     "Second User",
+		"email":    "second@example.com",
+		"password": "strongPassword123",
+		"phone":    "081122334455",
+	}
+	body2, _ := json.Marshal(payload2)
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/register", bytes.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	app.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("expected status 409 Conflict, got %d: body=%s", rec2.Code, rec2.Body.String())
+	}
+
+	var resp response.Response
+	_ = json.Unmarshal(rec2.Body.Bytes(), &resp)
+	if resp.Error == nil || resp.Error.Code != response.ErrCodeConflict {
+		t.Errorf("expected CONFLICT code, got %+v", resp.Error)
+	}
+	if _, ok := resp.Error.Details["phone"]; !ok {
+		t.Errorf("expected conflict details for phone")
+	}
+}
+
 func TestHandler_Login_Success(t *testing.T) {
 	app, svc, _ := setupTestApp()
 

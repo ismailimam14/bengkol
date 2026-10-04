@@ -112,7 +112,7 @@ func (r *postgresReviewRepository) GetReviewByID(ctx context.Context, id uuid.UU
 	query := `
 		SELECT 
 			r.id, r.booking_id, r.customer_id, r.workshop_id, r.rating, r.comment, r.created_at, r.updated_at,
-			u.id, u.name, u.email
+			u.id, u.name, COALESCE(u.email, '')
 		FROM reviews r
 		JOIN users u ON r.customer_id = u.id
 		WHERE r.id = $1
@@ -146,7 +146,7 @@ func (r *postgresReviewRepository) GetReviewByBookingID(ctx context.Context, boo
 	query := `
 		SELECT 
 			r.id, r.booking_id, r.customer_id, r.workshop_id, r.rating, r.comment, r.created_at, r.updated_at,
-			u.id, u.name, u.email
+			u.id, u.name, COALESCE(u.email, '')
 		FROM reviews r
 		JOIN users u ON r.customer_id = u.id
 		WHERE r.booking_id = $1
@@ -186,7 +186,7 @@ func (r *postgresReviewRepository) ListReviewsByWorkshop(ctx context.Context, wo
 	query := `
 		SELECT 
 			r.id, r.booking_id, r.customer_id, r.workshop_id, r.rating, r.comment, r.created_at, r.updated_at,
-			u.id, u.name, u.email
+			u.id, u.name, COALESCE(u.email, '')
 		FROM reviews r
 		JOIN users u ON r.customer_id = u.id
 		WHERE r.workshop_id = $1

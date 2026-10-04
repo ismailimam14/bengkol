@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,15 +62,19 @@ type mockAuthRepoAdapter struct {
 }
 
 func (m *mockAuthRepoAdapter) CreateUser(ctx context.Context, u *domain.User) error {
-	m.users[u.Email] = u
+	m.users[u.ID.String()] = u
 	return nil
 }
 func (m *mockAuthRepoAdapter) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
-	u, ok := m.users[email]
-	if !ok {
+	if email == "" {
 		return nil, auth.ErrUserNotFound
 	}
-	return u, nil
+	for _, u := range m.users {
+		if strings.EqualFold(u.Email, email) {
+			return u, nil
+		}
+	}
+	return nil, auth.ErrUserNotFound
 }
 func (m *mockAuthRepoAdapter) GetUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
 	for _, u := range m.users {

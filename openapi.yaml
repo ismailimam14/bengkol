@@ -62,6 +62,7 @@ paths:
   /api/v1/auth/register:
     post:
       summary: Register user
+      description: Register a new customer or workshop owner account. Phone number is mandatory; email is optional.
       tags:
         - Authentication
       requestBody:
@@ -2192,25 +2193,36 @@ components:
 
     RegisterRequest:
       type: object
+      description: User registration payload. Phone number is mandatory; email is optional.
       required:
         - name
-        - email
         - password
         - phone
       properties:
         name:
           type: string
+          example: John Doe
         email:
           type: string
           format: email
+          example: user@example.com
+          description: User email address (optional)
         password:
           type: string
           format: password
+          example: SecurePass123!
         phone:
           type: string
+          example: "081234567890"
+          description: User phone number (mandatory)
+        phone_number:
+          type: string
+          example: "081234567890"
+          description: User phone number (alias for phone)
         role:
           type: string
           enum: [CUSTOMER, OWNER]
+          example: CUSTOMER
 
     LoginRequest:
       type: object

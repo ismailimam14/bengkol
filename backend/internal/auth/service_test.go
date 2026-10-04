@@ -29,15 +29,25 @@ func newMockAuthRepo() *mockAuthRepo {
 }
 
 func (m *mockAuthRepo) CreateUser(ctx context.Context, user *domain.User) error {
-	if _, exists := m.users[user.Email]; exists {
-		return auth.ErrUserAlreadyExists
+	if user.Email != "" {
+		if _, exists := m.users[user.Email]; exists {
+			return auth.ErrUserAlreadyExists
+		}
+		m.users[user.Email] = user
 	}
-	m.users[user.Email] = user
+	for _, u := range m.usersByID {
+		if u.Phone == user.Phone {
+			return auth.ErrUserAlreadyExists
+		}
+	}
 	m.usersByID[user.ID] = user
 	return nil
 }
 
 func (m *mockAuthRepo) GetUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	if email == "" {
+		return nil, auth.ErrUserNotFound
+	}
 	u, ok := m.users[email]
 	if !ok {
 		return nil, auth.ErrUserNotFound
@@ -46,6 +56,9 @@ func (m *mockAuthRepo) GetUserByEmail(ctx context.Context, email string) (*domai
 }
 
 func (m *mockAuthRepo) GetUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	if phone == "" {
+		return nil, auth.ErrUserNotFound
+	}
 	for _, u := range m.usersByID {
 		if u.Phone == phone {
 			return u, nil
@@ -180,6 +193,147 @@ func TestAuthService_Register_DuplicateEmail(t *testing.T) {
 
 	if _, ok := valErrors["email"]; !ok {
 		t.Errorf("expected validation error on email field")
+	}
+}
+
+func TestAuthService_Register_Success_WithoutEmail(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	req := auth.RegisterRequest{
+		Name:     "No Email Customer",
+		Password: "password123",
+		Phone:    "08555444333",
+		Role:     domain.RoleCustomer,
+	}
+
+	resp, valErrors, err := svc.Register(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error during registration without email: %v", err)
+	}
+
+	if valErrors != nil {
+		t.Fatalf("expected no validation errors, got %+v", valErrors)
+	}
+
+	if resp.User.Email != "" {
+		t.Errorf("expected empty email, got %s", resp.User.Email)
+	}
+
+	if resp.User.Phone != "08555444333" {
+		t.Errorf("expected phone 08555444333, got %s", resp.User.Phone)
+	}
+
+	if resp.Tokens.AccessToken == "" || resp.Tokens.RefreshToken == "" {
+		t.Errorf("expected access and refresh tokens to be returned")
+	}
+}
+
+func TestAuthService_Register_Success_WithPhoneNumberField(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	req := auth.RegisterRequest{
+		Name:        "Alias Phone Customer",
+		Password:    "password123",
+		PhoneNumber: "08777666555",
+		Role:        domain.RoleCustomer,
+	}
+
+	resp, valErrors, err := svc.Register(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error during registration with phone_number field: %v", err)
+	}
+
+	if valErrors != nil {
+		t.Fatalf("expected no validation errors, got %+v", valErrors)
+	}
+
+	if resp.User.Phone != "08777666555" {
+		t.Errorf("expected phone 08777666555, got %s", resp.User.Phone)
+	}
+}
+
+func TestAuthService_Register_MissingPhone(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	req := auth.RegisterRequest{
+		Name:     "Missing Phone",
+		Email:    "test@example.com",
+		Password: "password123",
+		Phone:    "",
+		Role:     domain.RoleCustomer,
+	}
+
+	_, valErrors, err := svc.Register(context.Background(), req)
+	if !errors.Is(err, auth.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+
+	if _, ok := valErrors["phone"]; !ok {
+		t.Errorf("expected validation error on phone field")
+	}
+}
+
+func TestAuthService_Register_DuplicatePhone(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	req1 := auth.RegisterRequest{
+		Name:     "User One",
+		Email:    "user1@example.com",
+		Password: "password123",
+		Phone:    "08999888777",
+		Role:     domain.RoleCustomer,
+	}
+	_, _, err := svc.Register(context.Background(), req1)
+	if err != nil {
+		t.Fatalf("unexpected error on first registration: %v", err)
+	}
+
+	// Second registration with different email but SAME phone
+	req2 := auth.RegisterRequest{
+		Name:     "User Two",
+		Email:    "user2@example.com",
+		Password: "password456",
+		Phone:    "08999888777",
+		Role:     domain.RoleCustomer,
+	}
+	_, valErrors, err := svc.Register(context.Background(), req2)
+	if !errors.Is(err, auth.ErrUserAlreadyExists) {
+		t.Fatalf("expected ErrUserAlreadyExists on duplicate phone, got %v", err)
+	}
+
+	if _, ok := valErrors["phone"]; !ok {
+		t.Errorf("expected validation error on phone field")
+	}
+}
+
+func TestAuthService_Login_AfterRegistrationWithoutEmail(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	regReq := auth.RegisterRequest{
+		Name:     "Phone Only User",
+		Password: "secretPassword123",
+		Phone:    "081299990000",
+		Role:     domain.RoleCustomer,
+	}
+	_, _, err := svc.Register(context.Background(), regReq)
+	if err != nil {
+		t.Fatalf("registration error: %v", err)
+	}
+
+	// Login with phone and password
+	loginResp, err := svc.Login(context.Background(), auth.LoginRequest{
+		Phone:    "081299990000",
+		Password: "secretPassword123",
+	})
+	if err != nil {
+		t.Fatalf("login error: %v", err)
+	}
+
+	if loginResp.User.Phone != "081299990000" {
+		t.Errorf("expected user phone 081299990000, got %s", loginResp.User.Phone)
+	}
+	if loginResp.User.Email != "" {
+		t.Errorf("expected empty user email, got %s", loginResp.User.Email)
 	}
 }
 
