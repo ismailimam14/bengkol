@@ -13,6 +13,7 @@ import (
 
 var (
 	ErrWorkshopNotFound = errors.New("workshop not found")
+	ErrPhotoNotFound    = errors.New("photo not found")
 )
 
 // WorkshopFilter contains criteria for searching workshops.
@@ -30,7 +31,7 @@ type NearbyParams struct {
 	Offset       int
 }
 
-// Repository defines data access operations for Workshops and Operating Hours.
+// Repository defines data access operations for Workshops, Photos, and Operating Hours.
 type Repository interface {
 	Create(ctx context.Context, w *domain.Workshop) error
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.Workshop, error)
@@ -40,6 +41,10 @@ type Repository interface {
 	Update(ctx context.Context, w *domain.Workshop) error
 	GetOperatingHours(ctx context.Context, workshopID uuid.UUID) ([]domain.OperatingHour, error)
 	UpsertOperatingHours(ctx context.Context, workshopID uuid.UUID, hours []domain.OperatingHour) error
+	SavePhoto(ctx context.Context, photo *domain.WorkshopPhoto) error
+	GetPhotoByID(ctx context.Context, id uuid.UUID) (*domain.WorkshopPhoto, error)
+	GetPhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopPhoto, error)
+	DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error
 }
 
 type postgresRepository struct {
@@ -440,3 +445,90 @@ func (r *postgresRepository) UpsertOperatingHours(ctx context.Context, workshopI
 
 	return tx.Commit()
 }
+
+func (r *postgresRepository) SavePhoto(ctx context.Context, p *domain.WorkshopPhoto) error {
+	query := `
+		INSERT INTO workshop_photos (
+			id, workshop_id, data, content_type, filename, byte_size, created_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7
+		)
+	`
+	_, err := r.db.ExecContext(ctx, query,
+		p.ID,
+		p.WorkshopID,
+		p.Data,
+		p.ContentType,
+		p.Filename,
+		p.ByteSize,
+		p.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save workshop photo: %w", err)
+	}
+	return nil
+}
+
+func (r *postgresRepository) GetPhotoByID(ctx context.Context, id uuid.UUID) (*domain.WorkshopPhoto, error) {
+	query := `
+		SELECT id, workshop_id, data, content_type, filename, byte_size, created_at
+		FROM workshop_photos
+		WHERE id = $1
+	`
+	var p domain.WorkshopPhoto
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&p.ID,
+		&p.WorkshopID,
+		&p.Data,
+		&p.ContentType,
+		&p.Filename,
+		&p.ByteSize,
+		&p.CreatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrPhotoNotFound
+		}
+		return nil, fmt.Errorf("failed to get workshop photo: %w", err)
+	}
+	return &p, nil
+}
+
+func (r *postgresRepository) GetPhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopPhoto, error) {
+	query := `
+		SELECT id, workshop_id, data, content_type, filename, byte_size, created_at
+		FROM workshop_photos
+		WHERE workshop_id = $1
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, workshopID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query workshop photos: %w", err)
+	}
+	defer rows.Close()
+
+	var photos []domain.WorkshopPhoto
+	for rows.Next() {
+		var p domain.WorkshopPhoto
+		if err := rows.Scan(
+			&p.ID,
+			&p.WorkshopID,
+			&p.Data,
+			&p.ContentType,
+			&p.Filename,
+			&p.ByteSize,
+			&p.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan workshop photo: %w", err)
+		}
+		photos = append(photos, p)
+	}
+	return photos, rows.Err()
+}
+
+func (r *postgresRepository) DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error {
+	query := `DELETE FROM workshop_photos WHERE workshop_id = $1`
+	_, err := r.db.ExecContext(ctx, query, workshopID)
+	return err
+}
+

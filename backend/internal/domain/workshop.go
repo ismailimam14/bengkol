@@ -47,3 +47,15 @@ type OperatingHour struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
+
+// WorkshopPhoto represents binary photo data stored in the database.
+type WorkshopPhoto struct {
+	ID          uuid.UUID `json:"id"`
+	WorkshopID  uuid.UUID `json:"workshop_id"`
+	Data        []byte    `json:"-"`
+	ContentType string    `json:"content_type"`
+	Filename    string    `json:"filename"`
+	ByteSize    int       `json:"byte_size"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+

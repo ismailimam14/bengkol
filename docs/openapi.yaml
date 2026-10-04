@@ -276,6 +276,40 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkshopDetailResponse'
 
+  /api/v1/workshops/{id}/photos/{photoID}:
+    get:
+      summary: Retrieve workshop photo binary data
+      description: Returns the raw binary image stream stored directly in the database.
+      tags:
+        - Workshops
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: photoID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Binary photo image stream
+          content:
+            image/*:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Photo not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/v1/workshops/{id}/operating-hours:
     get:
       summary: Get workshop operating hours
@@ -2022,9 +2056,9 @@ components:
             type: string
             format: binary
           example:
-            - "https://example.com/photos/1.jpg"
-            - "https://example.com/photos/2.jpg"
-            - "https://example.com/photos/3.jpg"
+            - "/api/v1/workshops/3fa85f64-5717-4562-b3fc-2c963f66afa6/photos/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            - "/api/v1/workshops/3fa85f64-5717-4562-b3fc-2c963f66afa6/photos/a2b3c4d5-5717-4562-b3fc-2c963f66afa6"
+            - "/api/v1/workshops/3fa85f64-5717-4562-b3fc-2c963f66afa6/photos/b3c4d5e6-5717-4562-b3fc-2c963f66afa6"
         rating:
           type: number
           format: float

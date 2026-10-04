@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"os"
 
 	"github.com/bengkol/backend/config"
 	"github.com/bengkol/backend/internal/auth"
@@ -81,14 +80,6 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		r.Get("/docs/openapi.yaml", cfg.DocsHandler.OpenAPI)
 	}
 
-	// Static files for uploaded workshop photos and assets
-	uploadDir := "uploads"
-	if cfg.Config != nil && cfg.Config.UploadDir != "" {
-		uploadDir = cfg.Config.UploadDir
-	}
-	_ = os.MkdirAll(uploadDir, 0755)
-	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
-
 	// API v1 Sub-router
 	r.Route("/api/v1", func(v1 chi.Router) {
 		v1.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +107,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			v1.Get("/workshops/nearby", cfg.WorkshopHandler.FindNearby)
 			v1.Get("/workshops/{id}", cfg.WorkshopHandler.GetByID)
 			v1.Get("/workshops/{id}/operating-hours", cfg.WorkshopHandler.GetOperatingHours)
+			v1.Get("/workshops/{id}/photos/{photoID}", cfg.WorkshopHandler.GetPhoto)
+			v1.Get("/workshops/photos/{photoID}", cfg.WorkshopHandler.GetPhoto)
 
 			// Protected workshop management endpoints
 			v1.Group(func(protected chi.Router) {

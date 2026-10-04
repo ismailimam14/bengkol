@@ -376,8 +376,19 @@ func TestHandler_Workshop_Create_MultipartBinaryPhotos(t *testing.T) {
 		t.Fatalf("expected 3 photos in workshop response, got %d: %+v", len(resp.Data.Photos), resp.Data.Photos)
 	}
 	for i, photo := range resp.Data.Photos {
-		if !strings.HasPrefix(photo, "/uploads/workshops/") {
-			t.Errorf("photo[%d] = %s does not start with /uploads/workshops/", i, photo)
+		if !strings.HasPrefix(photo, "/api/v1/workshops/") || !strings.Contains(photo, "/photos/") {
+			t.Errorf("photo[%d] = %s does not have expected database photo URL format", i, photo)
+		}
+
+		// Retrieve binary photo from database via GET endpoint
+		getReq := httptest.NewRequest(http.MethodGet, photo, nil)
+		getRec := httptest.NewRecorder()
+		app.ServeHTTP(getRec, getReq)
+		if getRec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 retrieving photo %s, got %d", photo, getRec.Code)
+		}
+		if !bytes.Equal(getRec.Body.Bytes(), files[i].data) {
+			t.Errorf("photo[%d] returned binary data mismatch", i)
 		}
 	}
 
@@ -492,9 +503,33 @@ func TestHandler_Workshop_Update_MultipartBinaryPhotos(t *testing.T) {
 		t.Fatalf("expected 3 updated photos, got %d: %+v", len(resp.Data.Photos), resp.Data.Photos)
 	}
 	for i, photo := range resp.Data.Photos {
-		if !strings.HasPrefix(photo, "/uploads/workshops/") {
-			t.Errorf("photo[%d] = %s does not start with /uploads/workshops/", i, photo)
+		if !strings.HasPrefix(photo, "/api/v1/workshops/") || !strings.Contains(photo, "/photos/") {
+			t.Errorf("photo[%d] = %s does not have expected database photo URL format", i, photo)
+		}
+
+		// Retrieve binary photo from database via GET endpoint
+		getReq := httptest.NewRequest(http.MethodGet, photo, nil)
+		getRec := httptest.NewRecorder()
+		app.ServeHTTP(getRec, getReq)
+		if getRec.Code != http.StatusOK {
+			t.Fatalf("expected status 200 retrieving updated photo %s, got %d", photo, getRec.Code)
+		}
+		if !bytes.Equal(getRec.Body.Bytes(), files[i].data) {
+			t.Errorf("photo[%d] returned binary data mismatch", i)
 		}
 	}
 }
+
+func TestHandler_Workshop_GetPhoto_NotFound(t *testing.T) {
+	app, _, _ := setupTestAppWithWorkshop()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/workshops/"+uuid.New().String()+"/photos/"+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status 404 for non-existent photo, got %d", rec.Code)
+	}
+}
+
 

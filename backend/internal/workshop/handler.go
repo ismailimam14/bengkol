@@ -7,7 +7,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -49,6 +48,8 @@ func (h *Handler) PublicRoutes() chi.Router {
 	r.Get("/nearby", h.FindNearby)
 	r.Get("/{id}", h.GetByID)
 	r.Get("/{id}/operating-hours", h.GetOperatingHours)
+	r.Get("/{id}/photos/{photoID}", h.GetPhoto)
+	r.Get("/photos/{photoID}", h.GetPhoto)
 
 	return r
 }
@@ -180,21 +181,12 @@ func (h *Handler) GetByID(w http.ResponseWriter, r *http.Request) {
 	response.Success(w, http.StatusOK, ws)
 }
 
-func (h *Handler) saveUploadedPhotos(files []*multipart.FileHeader) ([]string, error) {
+func (h *Handler) readUploadedPhotos(files []*multipart.FileHeader) ([]RawPhotoInput, error) {
 	if len(files) == 0 {
 		return nil, nil
 	}
 
-	uploadDir := h.uploadDir
-	if uploadDir == "" {
-		uploadDir = filepath.Join("uploads", "workshops")
-	}
-
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create upload directory: %w", err)
-	}
-
-	var urls []string
+	var rawPhotos []RawPhotoInput
 	for _, fh := range files {
 		if fh.Size <= 0 {
 			return nil, errors.New("uploaded photo file is empty")
@@ -203,66 +195,59 @@ func (h *Handler) saveUploadedPhotos(files []*multipart.FileHeader) ([]string, e
 			return nil, errors.New("photo exceeds maximum allowed size of 10MB")
 		}
 
+		ct := fh.Header.Get("Content-Type")
 		ext := strings.ToLower(filepath.Ext(fh.Filename))
 		switch ext {
 		case ".jpg", ".jpeg", ".png", ".webp", ".gif":
 			// valid extension
 		case "":
-			ct := fh.Header.Get("Content-Type")
 			switch ct {
-			case "image/jpeg":
-				ext = ".jpg"
-			case "image/png":
-				ext = ".png"
-			case "image/webp":
-				ext = ".webp"
-			case "image/gif":
-				ext = ".gif"
+			case "image/jpeg", "image/png", "image/webp", "image/gif":
+				// valid
 			default:
-				ext = ".jpg"
+				ct = "image/jpeg"
 			}
 		default:
-			ct := fh.Header.Get("Content-Type")
 			switch ct {
-			case "image/jpeg":
-				ext = ".jpg"
-			case "image/png":
-				ext = ".png"
-			case "image/webp":
-				ext = ".webp"
-			case "image/gif":
-				ext = ".gif"
+			case "image/jpeg", "image/png", "image/webp", "image/gif":
+				// valid
 			default:
 				return nil, fmt.Errorf("invalid photo file format (%s); allowed: jpg, jpeg, png, webp, gif", ext)
 			}
 		}
 
-		uniqueName := fmt.Sprintf("%s%s", uuid.New().String(), ext)
-		destPath := filepath.Join(uploadDir, uniqueName)
+		if ct == "" || ct == "application/octet-stream" {
+			switch ext {
+			case ".png":
+				ct = "image/png"
+			case ".webp":
+				ct = "image/webp"
+			case ".gif":
+				ct = "image/gif"
+			default:
+				ct = "image/jpeg"
+			}
+		}
 
 		src, err := fh.Open()
 		if err != nil {
 			return nil, fmt.Errorf("failed to open uploaded file: %w", err)
 		}
 
-		dst, err := os.Create(destPath)
-		if err != nil {
-			src.Close()
-			return nil, fmt.Errorf("failed to create file on disk: %w", err)
-		}
-
-		_, copyErr := io.Copy(dst, src)
+		data, err := io.ReadAll(src)
 		src.Close()
-		dst.Close()
-
-		if copyErr != nil {
-			return nil, fmt.Errorf("failed to save uploaded file: %w", copyErr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read uploaded file: %w", err)
 		}
 
-		urls = append(urls, "/uploads/workshops/"+uniqueName)
+		rawPhotos = append(rawPhotos, RawPhotoInput{
+			Data:        data,
+			ContentType: ct,
+			Filename:    fh.Filename,
+		})
 	}
 
-	return urls, nil
+	return rawPhotos, nil
 }
 
 func (h *Handler) parseCreateRequest(r *http.Request) (CreateWorkshopRequest, error) {
@@ -298,20 +283,21 @@ func (h *Handler) parseCreateRequest(r *http.Request) (CreateWorkshopRequest, er
 		}
 
 		var photos []string
+		var rawPhotos []RawPhotoInput
 		if r.MultipartForm != nil {
 			if fhs := r.MultipartForm.File["photos"]; len(fhs) > 0 {
-				uploaded, err := h.saveUploadedPhotos(fhs)
+				read, err := h.readUploadedPhotos(fhs)
 				if err != nil {
 					return req, err
 				}
-				photos = append(photos, uploaded...)
+				rawPhotos = append(rawPhotos, read...)
 			}
 			if fhs := r.MultipartForm.File["photos[]"]; len(fhs) > 0 {
-				uploaded, err := h.saveUploadedPhotos(fhs)
+				read, err := h.readUploadedPhotos(fhs)
 				if err != nil {
 					return req, err
 				}
-				photos = append(photos, uploaded...)
+				rawPhotos = append(rawPhotos, read...)
 			}
 			if vals := r.MultipartForm.Value["photos"]; len(vals) > 0 {
 				for _, v := range vals {
@@ -329,6 +315,7 @@ func (h *Handler) parseCreateRequest(r *http.Request) (CreateWorkshopRequest, er
 			}
 		}
 		req.Photos = photos
+		req.RawPhotos = rawPhotos
 		return req, nil
 	}
 
@@ -381,21 +368,22 @@ func (h *Handler) parseUpdateRequest(r *http.Request) (UpdateWorkshopRequest, er
 
 			hasPhotos := false
 			var photos []string
+			var rawPhotos []RawPhotoInput
 			if fhs := r.MultipartForm.File["photos"]; len(fhs) > 0 {
 				hasPhotos = true
-				uploaded, err := h.saveUploadedPhotos(fhs)
+				read, err := h.readUploadedPhotos(fhs)
 				if err != nil {
 					return req, err
 				}
-				photos = append(photos, uploaded...)
+				rawPhotos = append(rawPhotos, read...)
 			}
 			if fhs := r.MultipartForm.File["photos[]"]; len(fhs) > 0 {
 				hasPhotos = true
-				uploaded, err := h.saveUploadedPhotos(fhs)
+				read, err := h.readUploadedPhotos(fhs)
 				if err != nil {
 					return req, err
 				}
-				photos = append(photos, uploaded...)
+				rawPhotos = append(rawPhotos, read...)
 			}
 			if vals, ok := r.MultipartForm.Value["photos"]; ok {
 				hasPhotos = true
@@ -415,6 +403,7 @@ func (h *Handler) parseUpdateRequest(r *http.Request) (UpdateWorkshopRequest, er
 			}
 			if hasPhotos {
 				req.Photos = &photos
+				req.RawPhotos = rawPhotos
 			}
 		}
 		return req, nil
@@ -424,6 +413,40 @@ func (h *Handler) parseUpdateRequest(r *http.Request) (UpdateWorkshopRequest, er
 		return req, err
 	}
 	return req, nil
+}
+
+// GetPhoto returns raw binary photo data directly from the database.
+func (h *Handler) GetPhoto(w http.ResponseWriter, r *http.Request) {
+	photoIDStr := chi.URLParam(r, "photoID")
+	if photoIDStr == "" {
+		photoIDStr = chi.URLParam(r, "id")
+	}
+	photoID, err := uuid.Parse(photoIDStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, response.ErrCodeBadRequest, "Invalid photo ID")
+		return
+	}
+
+	photo, err := h.service.GetPhoto(r.Context(), photoID)
+	if err != nil {
+		if errors.Is(err, ErrPhotoNotFound) {
+			response.Error(w, http.StatusNotFound, response.ErrCodeNotFound, "Photo not found")
+			return
+		}
+		h.logger.WithContext(r.Context()).Error("failed to get workshop photo", "photo_id", photoID, "error", err)
+		response.Error(w, http.StatusInternalServerError, response.ErrCodeInternalServerError, "Failed to retrieve photo")
+		return
+	}
+
+	contentType := photo.ContentType
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(photo.Data)))
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(photo.Data)
 }
 
 // Create handles workshop creation by authenticated owners.

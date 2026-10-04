@@ -19,12 +19,14 @@ import (
 type mockWorkshopRepo struct {
 	workshops      map[uuid.UUID]*domain.Workshop
 	operatingHours map[uuid.UUID][]domain.OperatingHour
+	photos         map[uuid.UUID]*domain.WorkshopPhoto
 }
 
 func newMockWorkshopRepo() *mockWorkshopRepo {
 	return &mockWorkshopRepo{
 		workshops:      make(map[uuid.UUID]*domain.Workshop),
 		operatingHours: make(map[uuid.UUID][]domain.OperatingHour),
+		photos:         make(map[uuid.UUID]*domain.WorkshopPhoto),
 	}
 }
 
@@ -141,6 +143,39 @@ func (m *mockWorkshopRepo) GetOperatingHours(ctx context.Context, workshopID uui
 
 func (m *mockWorkshopRepo) UpsertOperatingHours(ctx context.Context, workshopID uuid.UUID, hours []domain.OperatingHour) error {
 	m.operatingHours[workshopID] = hours
+	return nil
+}
+
+func (m *mockWorkshopRepo) SavePhoto(ctx context.Context, photo *domain.WorkshopPhoto) error {
+	m.photos[photo.ID] = photo
+	return nil
+}
+
+func (m *mockWorkshopRepo) GetPhotoByID(ctx context.Context, id uuid.UUID) (*domain.WorkshopPhoto, error) {
+	p, ok := m.photos[id]
+	if !ok {
+		return nil, workshop.ErrPhotoNotFound
+	}
+	copied := *p
+	return &copied, nil
+}
+
+func (m *mockWorkshopRepo) GetPhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopPhoto, error) {
+	var list []domain.WorkshopPhoto
+	for _, p := range m.photos {
+		if p.WorkshopID == workshopID {
+			list = append(list, *p)
+		}
+	}
+	return list, nil
+}
+
+func (m *mockWorkshopRepo) DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error {
+	for id, p := range m.photos {
+		if p.WorkshopID == workshopID {
+			delete(m.photos, id)
+		}
+	}
 	return nil
 }
 
