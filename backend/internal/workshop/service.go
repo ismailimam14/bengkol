@@ -27,6 +27,7 @@ type CreateWorkshopRequest struct {
 	Latitude       float64              `json:"latitude"`
 	Longitude      float64              `json:"longitude"`
 	Phone          string               `json:"phone"`
+	Photos         []string             `json:"photos"`
 	OperatingHours []OperatingHourInput `json:"operating_hours,omitempty"`
 }
 
@@ -38,6 +39,7 @@ type UpdateWorkshopRequest struct {
 	Latitude    *float64               `json:"latitude,omitempty"`
 	Longitude   *float64               `json:"longitude,omitempty"`
 	Phone       *string                `json:"phone,omitempty"`
+	Photos      *[]string              `json:"photos,omitempty"`
 	Status      *domain.WorkshopStatus `json:"status,omitempty"`
 }
 
@@ -84,6 +86,17 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 	v.Required("address", req.Address)
 	v.Required("phone", req.Phone)
 
+	var validPhotos []string
+	for _, p := range req.Photos {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			validPhotos = append(validPhotos, trimmed)
+		}
+	}
+	if len(validPhotos) < 3 {
+		v.AddError("photos", "at least 3 photos are required")
+	}
+
 	if req.Latitude < -90 || req.Latitude > 90 {
 		v.AddError("latitude", "latitude must be between -90 and 90 degrees")
 	}
@@ -93,6 +106,10 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 
 	if !v.IsValid() {
 		return nil, v.Errors, ErrValidationFailed
+	}
+
+	if validPhotos == nil {
+		validPhotos = []string{}
 	}
 
 	now := time.Now().UTC()
@@ -105,6 +122,7 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 		Latitude:    req.Latitude,
 		Longitude:   req.Longitude,
 		Phone:       req.Phone,
+		Photos:      validPhotos,
 		Rating:      0.0,
 		ReviewCount: 0,
 		Status:      domain.WorkshopStatusActive,
@@ -149,6 +167,10 @@ func (s *workshopService) GetWorkshopByID(ctx context.Context, id uuid.UUID) (*d
 		return nil, err
 	}
 
+	if ws.Photos == nil {
+		ws.Photos = []string{}
+	}
+
 	hours, err := s.repo.GetOperatingHours(ctx, id)
 	if err == nil {
 		ws.OperatingHours = hours
@@ -163,6 +185,12 @@ func (s *workshopService) ListWorkshops(ctx context.Context, pagination domain.P
 	list, total, err := s.repo.List(ctx, pagination, filter)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	for i := range list {
+		if list[i].Photos == nil {
+			list[i].Photos = []string{}
+		}
 	}
 
 	totalPages := int(total) / pagination.PageSize
@@ -198,11 +226,33 @@ func (s *workshopService) FindNearbyWorkshops(ctx context.Context, params Nearby
 		params.Limit = 50
 	}
 
-	return s.repo.FindNearby(ctx, params)
+	list, err := s.repo.FindNearby(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range list {
+		if list[i].Photos == nil {
+			list[i].Photos = []string{}
+		}
+	}
+
+	return list, nil
 }
 
 func (s *workshopService) GetMyWorkshops(ctx context.Context, ownerID uuid.UUID) ([]domain.Workshop, error) {
-	return s.repo.GetByOwnerID(ctx, ownerID)
+	list, err := s.repo.GetByOwnerID(ctx, ownerID)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range list {
+		if list[i].Photos == nil {
+			list[i].Photos = []string{}
+		}
+	}
+
+	return list, nil
 }
 
 func (s *workshopService) UpdateWorkshop(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, req UpdateWorkshopRequest) (*domain.Workshop, map[string]string, error) {
@@ -248,12 +298,30 @@ func (s *workshopService) UpdateWorkshop(ctx context.Context, workshopID uuid.UU
 		}
 		ws.Longitude = *req.Longitude
 	}
+	if req.Photos != nil {
+		var validPhotos []string
+		for _, p := range *req.Photos {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				validPhotos = append(validPhotos, trimmed)
+			}
+		}
+		if len(validPhotos) < 3 {
+			v.AddError("photos", "at least 3 photos are required")
+		} else {
+			ws.Photos = validPhotos
+		}
+	}
 	if req.Status != nil {
 		ws.Status = *req.Status
 	}
 
 	if !v.IsValid() {
 		return nil, v.Errors, ErrValidationFailed
+	}
+
+	if ws.Photos == nil {
+		ws.Photos = []string{}
 	}
 
 	ws.UpdatedAt = time.Now().UTC()

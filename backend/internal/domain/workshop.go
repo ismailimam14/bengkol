@@ -26,6 +26,7 @@ type Workshop struct {
 	Longitude      float64          `json:"longitude"`
 	DistanceMeters *float64         `json:"distance_meters,omitempty"`
 	Phone          string           `json:"phone"`
+	Photos         []string         `json:"photos"`
 	Rating         float64          `json:"rating"`
 	ReviewCount    int              `json:"review_count"`
 	Status         WorkshopStatus   `json:"status"`

@@ -1895,6 +1895,7 @@ components:
         - latitude
         - longitude
         - phone
+        - photos
       properties:
         name:
           type: string
@@ -1910,6 +1911,15 @@ components:
           format: double
         phone:
           type: string
+        photos:
+          type: array
+          minItems: 3
+          items:
+            type: string
+          example:
+            - "https://example.com/photos/1.jpg"
+            - "https://example.com/photos/2.jpg"
+            - "https://example.com/photos/3.jpg"
 
     UpdateWorkshopRequest:
       type: object
@@ -1928,6 +1938,15 @@ components:
           format: double
         phone:
           type: string
+        photos:
+          type: array
+          minItems: 3
+          items:
+            type: string
+          example:
+            - "https://example.com/photos/1.jpg"
+            - "https://example.com/photos/2.jpg"
+            - "https://example.com/photos/3.jpg"
         status:
           type: string
           enum: [ACTIVE, INACTIVE, SUSPENDED]
@@ -1987,6 +2006,14 @@ components:
           format: double
         phone:
           type: string
+        photos:
+          type: array
+          items:
+            type: string
+          example:
+            - "https://example.com/photos/1.jpg"
+            - "https://example.com/photos/2.jpg"
+            - "https://example.com/photos/3.jpg"
         rating:
           type: number
           format: float

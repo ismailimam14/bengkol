@@ -52,15 +52,18 @@ func NewRepository(db *sql.DB) Repository {
 }
 
 func (r *postgresRepository) Create(ctx context.Context, w *domain.Workshop) error {
+	if w.Photos == nil {
+		w.Photos = []string{}
+	}
 	query := `
 		INSERT INTO workshops (
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9, $10, $11,
-			$12, $13
+			$6, $7, $8, $9, $10, $11, $12,
+			$13, $14
 		)
 	`
 	_, err := r.db.ExecContext(ctx, query,
@@ -72,6 +75,7 @@ func (r *postgresRepository) Create(ctx context.Context, w *domain.Workshop) err
 		w.Latitude,
 		w.Longitude,
 		w.Phone,
+		w.Photos,
 		w.Rating,
 		w.ReviewCount,
 		w.Status,
@@ -88,7 +92,7 @@ func (r *postgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 	query := `
 		SELECT 
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE id = $1
@@ -105,6 +109,7 @@ func (r *postgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 		&w.Latitude,
 		&w.Longitude,
 		&w.Phone,
+		&w.Photos,
 		&w.Rating,
 		&w.ReviewCount,
 		&w.Status,
@@ -120,6 +125,9 @@ func (r *postgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 	if desc.Valid {
 		w.Description = desc.String
 	}
+	if w.Photos == nil {
+		w.Photos = []string{}
+	}
 	return &w, nil
 }
 
@@ -127,7 +135,7 @@ func (r *postgresRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID
 	query := `
 		SELECT 
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE owner_id = $1
@@ -152,6 +160,7 @@ func (r *postgresRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID
 			&w.Latitude,
 			&w.Longitude,
 			&w.Phone,
+			&w.Photos,
 			&w.Rating,
 			&w.ReviewCount,
 			&w.Status,
@@ -162,6 +171,9 @@ func (r *postgresRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID
 		}
 		if desc.Valid {
 			w.Description = desc.String
+		}
+		if w.Photos == nil {
+			w.Photos = []string{}
 		}
 		list = append(list, w)
 	}
@@ -192,7 +204,7 @@ func (r *postgresRepository) List(ctx context.Context, pagination domain.Paginat
 	selectQuery := `
 		SELECT 
 			id, owner_id, name, description, address,
-			latitude, longitude, phone, rating, review_count, status,
+			latitude, longitude, phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE 1=1
@@ -233,6 +245,7 @@ func (r *postgresRepository) List(ctx context.Context, pagination domain.Paginat
 			&w.Latitude,
 			&w.Longitude,
 			&w.Phone,
+			&w.Photos,
 			&w.Rating,
 			&w.ReviewCount,
 			&w.Status,
@@ -243,6 +256,9 @@ func (r *postgresRepository) List(ctx context.Context, pagination domain.Paginat
 		}
 		if desc.Valid {
 			w.Description = desc.String
+		}
+		if w.Photos == nil {
+			w.Photos = []string{}
 		}
 		list = append(list, w)
 	}
@@ -256,7 +272,7 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 			id, owner_id, name, description, address,
 			latitude, longitude,
 			ST_Distance(location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_meters,
-			phone, rating, review_count, status,
+			phone, photos, rating, review_count, status,
 			created_at, updated_at
 		FROM workshops
 		WHERE status = 'ACTIVE'
@@ -291,6 +307,7 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 			&w.Longitude,
 			&dist,
 			&w.Phone,
+			&w.Photos,
 			&w.Rating,
 			&w.ReviewCount,
 			&w.Status,
@@ -302,6 +319,9 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 		if desc.Valid {
 			w.Description = desc.String
 		}
+		if w.Photos == nil {
+			w.Photos = []string{}
+		}
 		w.DistanceMeters = &dist
 		list = append(list, w)
 	}
@@ -309,6 +329,9 @@ func (r *postgresRepository) FindNearby(ctx context.Context, params NearbyParams
 }
 
 func (r *postgresRepository) Update(ctx context.Context, w *domain.Workshop) error {
+	if w.Photos == nil {
+		w.Photos = []string{}
+	}
 	query := `
 		UPDATE workshops
 		SET 
@@ -318,9 +341,10 @@ func (r *postgresRepository) Update(ctx context.Context, w *domain.Workshop) err
 			latitude = $4,
 			longitude = $5,
 			phone = $6,
-			status = $7,
-			updated_at = $8
-		WHERE id = $9
+			photos = $7,
+			status = $8,
+			updated_at = $9
+		WHERE id = $10
 	`
 	res, err := r.db.ExecContext(ctx, query,
 		w.Name,
@@ -329,6 +353,7 @@ func (r *postgresRepository) Update(ctx context.Context, w *domain.Workshop) err
 		w.Latitude,
 		w.Longitude,
 		w.Phone,
+		w.Photos,
 		w.Status,
 		w.UpdatedAt,
 		w.ID,

@@ -154,6 +154,11 @@ func TestHandler_Workshop_Create_RoleAuthorization(t *testing.T) {
 		"latitude":  -6.2,
 		"longitude": 106.8,
 		"phone":     "0811223344",
+		"photos": []string{
+			"https://example.com/1.jpg",
+			"https://example.com/2.jpg",
+			"https://example.com/3.jpg",
+		},
 	}
 	body, _ := json.Marshal(createPayload)
 
@@ -177,6 +182,67 @@ func TestHandler_Workshop_Create_RoleAuthorization(t *testing.T) {
 	app.ServeHTTP(recCustomer, reqCustomer)
 	if recCustomer.Code != http.StatusForbidden {
 		t.Fatalf("expected status 403 for CUSTOMER, got %d", recCustomer.Code)
+	}
+}
+
+func TestHandler_Workshop_Create_MinPhotosValidation(t *testing.T) {
+	app, _, jwtMgr := setupTestAppWithWorkshop()
+
+	owner := &domain.User{ID: uuid.New(), Email: "owner@bengkol.com", Role: domain.RoleOwner}
+	ownerTokens, _, _ := jwtMgr.GenerateTokenPair(owner)
+
+	// 1. Less than 3 photos -> 422 Unprocessable Entity
+	badPayload := map[string]interface{}{
+		"name":      "New Workshop",
+		"address":   "Jl. Pemuda No. 1",
+		"latitude":  -6.2,
+		"longitude": 106.8,
+		"phone":     "0811223344",
+		"photos":    []string{"https://example.com/1.jpg", "https://example.com/2.jpg"},
+	}
+	badBody, _ := json.Marshal(badPayload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/workshops", bytes.NewReader(badBody))
+	req.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status 422 for less than 3 photos, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var errResp response.Response
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if errResp.Error.Code != response.ErrCodeValidationFailed {
+		t.Errorf("expected error code %s, got %s", response.ErrCodeValidationFailed, errResp.Error.Code)
+	}
+
+	// 2. 3 valid photos -> 201 Created
+	goodPayload := map[string]interface{}{
+		"name":      "New Workshop",
+		"address":   "Jl. Pemuda No. 1",
+		"latitude":  -6.2,
+		"longitude": 106.8,
+		"phone":     "0811223344",
+		"photos": []string{
+			"https://example.com/1.jpg",
+			"https://example.com/2.jpg",
+			"https://example.com/3.jpg",
+		},
+	}
+	goodBody, _ := json.Marshal(goodPayload)
+
+	reqGood := httptest.NewRequest(http.MethodPost, "/api/v1/workshops", bytes.NewReader(goodBody))
+	reqGood.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	reqGood.Header.Set("Content-Type", "application/json")
+	recGood := httptest.NewRecorder()
+
+	app.ServeHTTP(recGood, reqGood)
+	if recGood.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", recGood.Code, recGood.Body.String())
 	}
 }
 

@@ -163,6 +163,11 @@ func TestWorkshopService_Create_Success(t *testing.T) {
 		Latitude:    -6.2088,
 		Longitude:   106.8456,
 		Phone:       "081234567890",
+		Photos: []string{
+			"https://example.com/photos/1.jpg",
+			"https://example.com/photos/2.jpg",
+			"https://example.com/photos/3.jpg",
+		},
 		OperatingHours: []workshop.OperatingHourInput{
 			{DayOfWeek: 1, OpenTime: "08:00", CloseTime: "17:00", IsClosed: false},
 			{DayOfWeek: 2, OpenTime: "08:00", CloseTime: "17:00", IsClosed: false},
@@ -185,6 +190,10 @@ func TestWorkshopService_Create_Success(t *testing.T) {
 
 	if ws.OwnerID != ownerID {
 		t.Errorf("expected owner ID %s, got %s", ownerID, ws.OwnerID)
+	}
+
+	if len(ws.Photos) != 3 {
+		t.Errorf("expected 3 photos, got %d", len(ws.Photos))
 	}
 
 	if len(ws.OperatingHours) != 3 {
@@ -214,6 +223,86 @@ func TestWorkshopService_Create_ValidationErrors(t *testing.T) {
 	}
 	if _, ok := valErrors["latitude"]; !ok {
 		t.Errorf("expected validation error on latitude")
+	}
+	if _, ok := valErrors["photos"]; !ok {
+		t.Errorf("expected validation error on photos")
+	}
+}
+
+func TestWorkshopService_Create_MinThreePhotos(t *testing.T) {
+	svc, _ := setupWorkshopService()
+	ownerID := uuid.New()
+
+	baseReq := workshop.CreateWorkshopRequest{
+		Name:      "Bengkel Foto Test",
+		Address:   "Jl. Foto No. 1",
+		Phone:     "0812345678",
+		Latitude:  -6.2,
+		Longitude: 106.8,
+	}
+
+	// 1. Nil photos -> should fail
+	reqNil := baseReq
+	reqNil.Photos = nil
+	_, valErrors, err := svc.CreateWorkshop(context.Background(), ownerID, reqNil)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for nil photos")
+	}
+	if valErrors["photos"] != "at least 3 photos are required" {
+		t.Errorf("expected 'at least 3 photos are required', got %s", valErrors["photos"])
+	}
+
+	// 2. 2 photos -> should fail
+	reqTwo := baseReq
+	reqTwo.Photos = []string{"https://example.com/1.jpg", "https://example.com/2.jpg"}
+	_, valErrors, err = svc.CreateWorkshop(context.Background(), ownerID, reqTwo)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for 2 photos")
+	}
+	if valErrors["photos"] != "at least 3 photos are required" {
+		t.Errorf("expected 'at least 3 photos are required', got %s", valErrors["photos"])
+	}
+
+	// 3. 3 photos with empty/whitespace string -> should fail (only 2 valid)
+	reqWhitespace := baseReq
+	reqWhitespace.Photos = []string{"https://example.com/1.jpg", "   ", "https://example.com/2.jpg"}
+	_, valErrors, err = svc.CreateWorkshop(context.Background(), ownerID, reqWhitespace)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for photos with whitespace")
+	}
+	if valErrors["photos"] != "at least 3 photos are required" {
+		t.Errorf("expected 'at least 3 photos are required', got %s", valErrors["photos"])
+	}
+
+	// 4. Exactly 3 valid photos -> success
+	reqThree := baseReq
+	reqThree.Photos = []string{
+		"https://example.com/1.jpg",
+		"https://example.com/2.jpg",
+		"https://example.com/3.jpg",
+	}
+	ws, valErrors, err := svc.CreateWorkshop(context.Background(), ownerID, reqThree)
+	if err != nil {
+		t.Fatalf("unexpected error for 3 valid photos: %v", err)
+	}
+	if len(ws.Photos) != 3 {
+		t.Errorf("expected 3 photos, got %d", len(ws.Photos))
+	}
+
+	// 5. 4 valid photos -> success
+	reqFour := baseReq
+	reqFour.Photos = []string{
+		"https://example.com/1.jpg",
+		"https://example.com/2.jpg",
+		"https://example.com/3.jpg",
+		"https://example.com/4.jpg",
+	}
+	ws4, valErrors, err := svc.CreateWorkshop(context.Background(), ownerID, reqFour)
+	if err != nil {
+		t.Fatalf("unexpected error for 4 valid photos: %v", err)
+	}
+	if len(ws4.Photos) != 4 {
+		t.Errorf("expected 4 photos, got %d", len(ws4.Photos))
 	}
 }
 
@@ -331,3 +420,55 @@ func TestWorkshopService_Update_OwnershipEnforcement(t *testing.T) {
 		t.Errorf("expected admin update to succeed")
 	}
 }
+
+func TestWorkshopService_Update_Photos(t *testing.T) {
+	svc, repo := setupWorkshopService()
+
+	ownerID := uuid.New()
+	wsID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{
+		ID:        wsID,
+		OwnerID:   ownerID,
+		Name:      "Workshop Photo Test",
+		Address:   "Jl. Tes",
+		Phone:     "081111111",
+		Photos: []string{
+			"https://example.com/1.jpg",
+			"https://example.com/2.jpg",
+			"https://example.com/3.jpg",
+		},
+		Status:    domain.WorkshopStatusActive,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	// 1. Updating with fewer than 3 photos fails validation
+	badPhotos := []string{"https://example.com/new1.jpg", "https://example.com/new2.jpg"}
+	_, valErrors, err := svc.UpdateWorkshop(context.Background(), wsID, ownerID, domain.RoleOwner, workshop.UpdateWorkshopRequest{
+		Photos: &badPhotos,
+	})
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for < 3 photos update")
+	}
+	if valErrors["photos"] != "at least 3 photos are required" {
+		t.Errorf("expected 'at least 3 photos are required', got %s", valErrors["photos"])
+	}
+
+	// 2. Updating with 3 valid photos succeeds
+	goodPhotos := []string{
+		"https://example.com/new1.jpg",
+		"https://example.com/new2.jpg",
+		"https://example.com/new3.jpg",
+	}
+	updated, _, err := svc.UpdateWorkshop(context.Background(), wsID, ownerID, domain.RoleOwner, workshop.UpdateWorkshopRequest{
+		Photos: &goodPhotos,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error updating photos: %v", err)
+	}
+	if len(updated.Photos) != 3 || updated.Photos[0] != "https://example.com/new1.jpg" {
+		t.Errorf("expected updated photos, got %+v", updated.Photos)
+	}
+}
+
