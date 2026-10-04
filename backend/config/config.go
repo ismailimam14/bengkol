@@ -14,7 +14,8 @@ type Config struct {
 	AppEnv   string
 	AppPort  string
 	AppName  string
-	LogLevel string
+	LogLevel  string
+	UploadDir string
 
 	Database DatabaseConfig
 	JWT      JWTConfig
@@ -75,8 +76,9 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		AppEnv:   getEnv("APP_ENV", "development"),
 		AppPort:  getEnv("APP_PORT", "8080"),
-		AppName:  getEnv("APP_NAME", "bengkol-api"),
-		LogLevel: getEnv("LOG_LEVEL", "debug"),
+		AppName:   getEnv("APP_NAME", "bengkol-api"),
+		LogLevel:  getEnv("LOG_LEVEL", "debug"),
+		UploadDir: getEnv("UPLOAD_DIR", "uploads"),
 		Database: DatabaseConfig{
 			Host:               getEnv("DB_HOST", "localhost"),
 			Port:               dbPort,

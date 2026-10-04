@@ -1,5 +1,6 @@
 # Binaries and build artifacts
 bin/
+uploads/
 *.exe
 *.exe~
 *.dll

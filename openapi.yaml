@@ -182,6 +182,9 @@ paths:
       requestBody:
         required: true
         content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CreateWorkshopRequest'
           application/json:
             schema:
               $ref: '#/components/schemas/CreateWorkshopRequest'
@@ -259,6 +262,9 @@ paths:
       requestBody:
         required: true
         content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UpdateWorkshopRequest'
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateWorkshopRequest'
@@ -1916,6 +1922,8 @@ components:
           minItems: 3
           items:
             type: string
+            format: binary
+          description: Workshop photos in binary format (at least 3 photos required)
           example:
             - "https://example.com/photos/1.jpg"
             - "https://example.com/photos/2.jpg"
@@ -1943,6 +1951,8 @@ components:
           minItems: 3
           items:
             type: string
+            format: binary
+          description: Workshop photos in binary format (at least 3 photos required)
           example:
             - "https://example.com/photos/1.jpg"
             - "https://example.com/photos/2.jpg"
@@ -2010,6 +2020,7 @@ components:
           type: array
           items:
             type: string
+            format: binary
           example:
             - "https://example.com/photos/1.jpg"
             - "https://example.com/photos/2.jpg"
