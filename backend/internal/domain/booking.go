@@ -32,6 +32,19 @@ type BookingSlot struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+// BookingSparePart represents a spare part reserved as part of a customer's booking
+type BookingSparePart struct {
+	ID           uuid.UUID  `json:"id"`
+	BookingID    uuid.UUID  `json:"booking_id"`
+	SparePartID  uuid.UUID  `json:"spare_part_id"`
+	Quantity     int        `json:"quantity"`
+	PricePerUnit float64    `json:"price_per_unit"`
+	Subtotal     float64    `json:"subtotal"`
+	CreatedAt    time.Time  `json:"created_at"`
+
+	SparePart *SparePart `json:"spare_part,omitempty"`
+}
+
 // Booking represents a customer's appointment reservation
 type Booking struct {
 	ID            uuid.UUID     `json:"id"`
@@ -44,12 +57,14 @@ type Booking struct {
 	BookingTime   string        `json:"booking_time"`
 	Status        BookingStatus `json:"status"`
 	CustomerNotes string        `json:"customer_notes,omitempty"`
+	TotalPrice    float64       `json:"total_price"`
 	CreatedAt     time.Time     `json:"created_at"`
 	UpdatedAt     time.Time     `json:"updated_at"`
 
 	// Relational references
-	Customer *User     `json:"customer,omitempty"`
-	Workshop *Workshop `json:"workshop,omitempty"`
-	Service  *Service  `json:"service,omitempty"`
-	Queue    *Queue    `json:"queue,omitempty"`
+	Customer   *User              `json:"customer,omitempty"`
+	Workshop   *Workshop          `json:"workshop,omitempty"`
+	Service    *Service           `json:"service,omitempty"`
+	SpareParts []BookingSparePart `json:"spare_parts,omitempty"`
+	Queue      *Queue             `json:"queue,omitempty"`
 }

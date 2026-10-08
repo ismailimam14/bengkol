@@ -1823,6 +1823,54 @@ components:
         customer_notes:
           type: string
           example: "Tolong periksa kampas rem juga"
+        spare_parts:
+          type: array
+          description: Optional list of spare parts to book and reserve for this appointment.
+          items:
+            $ref: '#/components/schemas/BookingSparePartItemRequest'
+
+    BookingSparePartItemRequest:
+      type: object
+      required:
+        - spare_part_id
+        - quantity
+      properties:
+        spare_part_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+          example: 1
+
+    BookingSparePart:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        spare_part_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          example: 1
+        price_per_unit:
+          type: number
+          format: float
+          example: 65000
+        subtotal:
+          type: number
+          format: float
+          example: 65000
+        created_at:
+          type: string
+          format: date-time
+        spare_part:
+          $ref: '#/components/schemas/SparePart'
 
     Booking:
       type: object
@@ -1855,6 +1903,11 @@ components:
           enum: [PENDING, CONFIRMED, CANCELLED, NO_SHOW, IN_SERVICE, COMPLETED]
         customer_notes:
           type: string
+        total_price:
+          type: number
+          format: float
+          description: Total price including service fee and booked spare parts.
+          example: 175000.00
         created_at:
           type: string
           format: date-time
@@ -1865,6 +1918,10 @@ components:
           $ref: '#/components/schemas/Workshop'
         service:
           $ref: '#/components/schemas/Service'
+        spare_parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/BookingSparePart'
 
     BookingDetailResponse:
       type: object
