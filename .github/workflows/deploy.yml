@@ -1,0 +1,150 @@
+name: Deploy Environment (CD)
+
+on:
+  push:
+    branches:
+      - develop
+      - uat
+      - staging
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Deployment Environment'
+        required: true
+        type: choice
+        default: 'develop'
+        options:
+          - develop
+          - uat
+          - staging
+          - prod
+      run_migrations:
+        description: 'Run Database Migrations'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+  deployments: write
+
+concurrency:
+  group: deploy-${{ github.event.inputs.environment || (github.ref_name == 'main' && 'prod') || (github.ref_name == 'staging' && 'staging') || (github.ref_name == 'uat' && 'uat') || 'develop' }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-target:
+    name: Resolve Target Environment
+    runs-on: ubuntu-latest
+    outputs:
+      env_name: ${{ steps.resolve.outputs.env_name }}
+      env_url: ${{ steps.resolve.outputs.env_url }}
+    steps:
+      - id: resolve
+        run: |
+          TARGET="${{ github.event.inputs.environment }}"
+          if [ -z "$TARGET" ]; then
+            case "${{ github.ref_name }}" in
+              main)
+                TARGET="prod"
+                ;;
+              staging)
+                TARGET="staging"
+                ;;
+              uat)
+                TARGET="uat"
+                ;;
+              develop)
+                TARGET="develop"
+                ;;
+              *)
+                TARGET="develop"
+                ;;
+            esac
+          fi
+
+          case "$TARGET" in
+            prod)
+              URL="https://api.bengkol.com"
+              ;;
+            staging)
+              URL="https://api-staging.bengkol.com"
+              ;;
+            uat)
+              URL="https://api-uat.bengkol.com"
+              ;;
+            develop)
+              URL="https://api-dev.bengkol.com"
+              ;;
+            *)
+              URL="http://localhost:8080"
+              ;;
+          esac
+
+          echo "env_name=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "env_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Target Environment: $TARGET ($URL)"
+
+  deploy:
+    name: Deploy to ${{ needs.resolve-target.outputs.env_name }}
+    needs: resolve-target
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.resolve-target.outputs.env_name }}
+      url: ${{ needs.resolve-target.outputs.env_url }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: backend/go.sum
+
+      - name: Build Application Binary
+        working-directory: backend
+        env:
+          APP_ENV: ${{ needs.resolve-target.outputs.env_name }}
+        run: |
+          echo "Building binary for environment: $APP_ENV"
+          CGO_ENABLED=0 GOOS=linux go build \
+            -ldflags="-w -s -X main.version=${{ github.sha }} -X main.environment=$APP_ENV" \
+            -o bin/bengkol-api ./cmd/api
+
+      - name: Build and Tag Container Image
+        env:
+          TARGET_ENV: ${{ needs.resolve-target.outputs.env_name }}
+        run: |
+          IMAGE_TAG="bengkol-api:${TARGET_ENV}-${{ github.sha }}"
+          echo "Building Docker image: $IMAGE_TAG"
+          docker build \
+            --build-arg APP_ENV=${TARGET_ENV} \
+            -t $IMAGE_TAG ./backend
+          docker tag $IMAGE_TAG "bengkol-api:${TARGET_ENV}-latest"
+
+      - name: Verify Environment Configuration & Secrets
+        env:
+          TARGET_ENV: ${{ needs.resolve-target.outputs.env_name }}
+          APP_PORT: ${{ vars.APP_PORT || '8080' }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL || (needs.resolve-target.outputs.env_name == 'prod' && 'warn') || (needs.resolve-target.outputs.env_name == 'develop' && 'debug') || 'info' }}
+          DB_HOST: ${{ secrets.DB_HOST || vars.DB_HOST || 'internal-db' }}
+        run: |
+          echo "=== Deployment Parameters ==="
+          echo "Target Environment: $TARGET_ENV"
+          echo "Service Port: $APP_PORT"
+          echo "Log Level: $LOG_LEVEL"
+          echo "Git Commit SHA: ${{ github.sha }}"
+          echo "Workflow Run ID: ${{ github.run_id }}"
+          echo "Actor: ${{ github.actor }}"
+
+      - name: Deployment Summary
+        run: |
+          echo "### 🚀 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Environment:** \`${{ needs.resolve-target.outputs.env_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Endpoint URL:** ${{ needs.resolve-target.outputs.env_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered By:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY

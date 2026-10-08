@@ -44,9 +44,10 @@ func NewWithOutput(env string, levelStr string, w io.Writer) *Logger {
 	}
 
 	var handler slog.Handler
-	if strings.ToLower(env) == "production" {
+	switch strings.ToLower(strings.TrimSpace(env)) {
+	case "prod", "production", "staging", "uat":
 		handler = slog.NewJSONHandler(w, opts)
-	} else {
+	default:
 		handler = slog.NewTextHandler(w, opts)
 	}
 

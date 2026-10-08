@@ -1,0 +1,64 @@
+# ==============================================================================
+# Docker Compose: PRODUCTION (PROD) Standalone Stack
+# Usage: docker compose -f docker-compose.prod.yml up -d
+# Note: For production deployments, pgAdmin is disabled and DB port is not exposed.
+# ==============================================================================
+services:
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: bengkol_postgres_prod
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:-bengkol_db_prod}
+    # No public port exposure in production: accessed only via internal docker network
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-bengkol_db_prod}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bengkol_prod_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: bengkol_backend_prod
+    restart: always
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      APP_ENV: prod
+      APP_PORT: 8080
+      APP_NAME: bengkol-api
+      LOG_LEVEL: ${LOG_LEVEL:-warn}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME:-bengkol_db_prod}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+      DB_MAX_OPEN_CONNS: 100
+      DB_MAX_IDLE_CONNS: 25
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRY_MINUTES: 15
+      JWT_REFRESH_EXPIRY_DAYS: 7
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://bengkol.com,https://admin.bengkol.com}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - bengkol_prod_network
+
+volumes:
+  postgres_prod_data:
+    driver: local
+
+networks:
+  bengkol_prod_network:
+    driver: bridge
