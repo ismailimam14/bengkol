@@ -1834,6 +1834,34 @@ components:
         error:
           $ref: '#/components/schemas/APIError'
 
+    ValidationErrorResponse:
+      type: object
+      required:
+        - success
+        - error
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              example: "VALIDATION_FAILED"
+            message:
+              type: string
+              example: "One or more validation errors occurred"
+            details:
+              type: object
+              additionalProperties:
+                type: string
+              example:
+                spare_parts[0].spare_part_id: "spare part does not belong to the selected workshop"
+
     APIError:
       type: object
       required:
