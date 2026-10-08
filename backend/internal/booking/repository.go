@@ -16,6 +16,8 @@ var (
 	ErrSlotUnavailable   = errors.New("the selected slot is no longer available")
 	ErrSlotNotFound      = errors.New("booking slot not found")
 	ErrInvalidOperation  = errors.New("cannot cancel a booking that is completed or in service")
+	ErrSparePartNotFound = errors.New("spare part not found")
+	ErrInsufficientStock = errors.New("insufficient stock for requested spare part")
 )
 
 // Repository defines data operations for bookings and slots.
@@ -36,6 +38,13 @@ type Repository interface {
 	GetWorkshopOperatingHour(ctx context.Context, workshopID uuid.UUID, dayOfWeek int) (*domain.OperatingHour, error)
 	GetWorkshopByID(ctx context.Context, workshopID uuid.UUID) (*domain.Workshop, error)
 	GetServiceByID(ctx context.Context, serviceID uuid.UUID) (*domain.Service, error)
+
+	GetSparePartForUpdateInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*domain.SparePart, error)
+	DecrementSparePartStockInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID, quantity int) error
+	IncrementSparePartStockInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID, quantity int) error
+	CreateBookingSparePartInTx(ctx context.Context, tx *sql.Tx, item *domain.BookingSparePart) error
+	GetBookingSpareParts(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingSparePart, error)
+	GetBookingSparePartsInTx(ctx context.Context, tx *sql.Tx, bookingID uuid.UUID) ([]domain.BookingSparePart, error)
 
 	BeginTx(ctx context.Context) (*sql.Tx, error)
 }
@@ -181,9 +190,9 @@ func (r *postgresRepository) CreateBookingInTx(ctx context.Context, tx *sql.Tx, 
 	query := `
 		INSERT INTO bookings (
 			id, booking_number, customer_id, workshop_id, service_id, slot_id,
-			booking_date, booking_time, status, customer_notes, created_at, updated_at
+			booking_date, booking_time, status, customer_notes, total_price, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 		)
 	`
 	_, err := tx.ExecContext(ctx, query,
@@ -197,6 +206,7 @@ func (r *postgresRepository) CreateBookingInTx(ctx context.Context, tx *sql.Tx, 
 		b.BookingTime,
 		b.Status,
 		b.CustomerNotes,
+		b.TotalPrice,
 		b.CreatedAt,
 		b.UpdatedAt,
 	)
@@ -210,7 +220,7 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 	query := `
 		SELECT 
 			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
-			b.booking_date, b.booking_time, b.status, b.customer_notes, b.created_at, b.updated_at,
+			b.booking_date, b.booking_time, b.status, b.customer_notes, b.total_price, b.created_at, b.updated_at,
 			u.id, u.name, COALESCE(u.email, ''), u.phone,
 			w.id, w.name, w.address, w.phone,
 			s.id, s.name, s.price, s.duration_minutes
@@ -239,6 +249,7 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 		&b.BookingTime,
 		&b.Status,
 		&notes,
+		&b.TotalPrice,
 		&b.CreatedAt,
 		&b.UpdatedAt,
 		&u.ID, &u.Name, &u.Email, &u.Phone,
@@ -258,12 +269,18 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 	b.Customer = &u
 	b.Workshop = &w
 	b.Service = &s
+
+	parts, err := r.GetBookingSpareParts(ctx, b.ID)
+	if err == nil {
+		b.SpareParts = parts
+	}
+
 	return &b, nil
 }
 
 func (r *postgresRepository) GetBookingByIDForUpdate(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*domain.Booking, error) {
 	query := `
-		SELECT id, booking_number, customer_id, workshop_id, service_id, slot_id, booking_date, booking_time, status, customer_notes, created_at, updated_at
+		SELECT id, booking_number, customer_id, workshop_id, service_id, slot_id, booking_date, booking_time, status, customer_notes, total_price, created_at, updated_at
 		FROM bookings
 		WHERE id = $1
 		FOR UPDATE
@@ -283,6 +300,7 @@ func (r *postgresRepository) GetBookingByIDForUpdate(ctx context.Context, tx *sq
 		&b.BookingTime,
 		&b.Status,
 		&notes,
+		&b.TotalPrice,
 		&b.CreatedAt,
 		&b.UpdatedAt,
 	)
@@ -322,7 +340,7 @@ func (r *postgresRepository) ListByCustomer(ctx context.Context, customerID uuid
 	query := `
 		SELECT 
 			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
-			b.booking_date, b.booking_time, b.status, b.customer_notes, b.created_at, b.updated_at,
+			b.booking_date, b.booking_time, b.status, b.customer_notes, b.total_price, b.created_at, b.updated_at,
 			w.id, w.name, w.address, w.phone,
 			s.id, s.name, s.price, s.duration_minutes
 		FROM bookings b
@@ -348,7 +366,7 @@ func (r *postgresRepository) ListByCustomer(ctx context.Context, customerID uuid
 
 		if err := rows.Scan(
 			&b.ID, &b.BookingNumber, &b.CustomerID, &b.WorkshopID, &b.ServiceID, &b.SlotID,
-			&bDateVal, &b.BookingTime, &b.Status, &notes, &b.CreatedAt, &b.UpdatedAt,
+			&bDateVal, &b.BookingTime, &b.Status, &notes, &b.TotalPrice, &b.CreatedAt, &b.UpdatedAt,
 			&w.ID, &w.Name, &w.Address, &w.Phone,
 			&s.ID, &s.Name, &s.Price, &s.DurationMinutes,
 		); err != nil {
@@ -361,6 +379,11 @@ func (r *postgresRepository) ListByCustomer(ctx context.Context, customerID uuid
 		b.Workshop = &w
 		b.Service = &s
 		list = append(list, b)
+	}
+	for i := range list {
+		if sp, err := r.GetBookingSpareParts(ctx, list[i].ID); err == nil {
+			list[i].SpareParts = sp
+		}
 	}
 	return list, total, rows.Err()
 }
@@ -383,7 +406,7 @@ func (r *postgresRepository) ListByWorkshop(ctx context.Context, workshopID uuid
 	query := `
 		SELECT 
 			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
-			b.booking_date, b.booking_time, b.status, b.customer_notes, b.created_at, b.updated_at,
+			b.booking_date, b.booking_time, b.status, b.customer_notes, b.total_price, b.created_at, b.updated_at,
 			u.id, u.name, COALESCE(u.email, ''), u.phone,
 			s.id, s.name, s.price, s.duration_minutes
 		FROM bookings b
@@ -420,7 +443,7 @@ func (r *postgresRepository) ListByWorkshop(ctx context.Context, workshopID uuid
 
 		if err := rows.Scan(
 			&b.ID, &b.BookingNumber, &b.CustomerID, &b.WorkshopID, &b.ServiceID, &b.SlotID,
-			&bDateVal, &b.BookingTime, &b.Status, &notes, &b.CreatedAt, &b.UpdatedAt,
+			&bDateVal, &b.BookingTime, &b.Status, &notes, &b.TotalPrice, &b.CreatedAt, &b.UpdatedAt,
 			&u.ID, &u.Name, &u.Email, &u.Phone,
 			&s.ID, &s.Name, &s.Price, &s.DurationMinutes,
 		); err != nil {
@@ -433,6 +456,11 @@ func (r *postgresRepository) ListByWorkshop(ctx context.Context, workshopID uuid
 		b.Customer = &u
 		b.Service = &s
 		list = append(list, b)
+	}
+	for i := range list {
+		if sp, err := r.GetBookingSpareParts(ctx, list[i].ID); err == nil {
+			list[i].SpareParts = sp
+		}
 	}
 	return list, total, rows.Err()
 }
@@ -487,4 +515,147 @@ func (r *postgresRepository) GetServiceByID(ctx context.Context, serviceID uuid.
 		return nil, err
 	}
 	return &s, nil
+}
+
+func (r *postgresRepository) GetSparePartForUpdateInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*domain.SparePart, error) {
+	query := `
+		SELECT id, workshop_id, name, description, purchase_price, selling_price, stock, is_active, created_at, updated_at
+		FROM spare_parts
+		WHERE id = $1
+		FOR UPDATE
+	`
+	var sp domain.SparePart
+	var desc sql.NullString
+	err := tx.QueryRowContext(ctx, query, id).Scan(
+		&sp.ID, &sp.WorkshopID, &sp.Name, &desc,
+		&sp.PurchasePrice, &sp.SellingPrice, &sp.Stock, &sp.IsActive,
+		&sp.CreatedAt, &sp.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrSparePartNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan spare part for update: %w", err)
+	}
+	if desc.Valid {
+		sp.Description = desc.String
+	}
+	return &sp, nil
+}
+
+func (r *postgresRepository) DecrementSparePartStockInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID, quantity int) error {
+	query := `
+		UPDATE spare_parts
+		SET stock = stock - $1, updated_at = NOW()
+		WHERE id = $2 AND stock >= $1
+	`
+	res, err := tx.ExecContext(ctx, query, quantity, id)
+	if err != nil {
+		return fmt.Errorf("failed to decrement spare part stock: %w", err)
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		return ErrInsufficientStock
+	}
+	return nil
+}
+
+func (r *postgresRepository) IncrementSparePartStockInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID, quantity int) error {
+	query := `
+		UPDATE spare_parts
+		SET stock = stock + $1, updated_at = NOW()
+		WHERE id = $2
+	`
+	_, err := tx.ExecContext(ctx, query, quantity, id)
+	if err != nil {
+		return fmt.Errorf("failed to increment spare part stock: %w", err)
+	}
+	return nil
+}
+
+func (r *postgresRepository) CreateBookingSparePartInTx(ctx context.Context, tx *sql.Tx, item *domain.BookingSparePart) error {
+	query := `
+		INSERT INTO booking_spare_parts (
+			id, booking_id, spare_part_id, quantity, price_per_unit, subtotal, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`
+	_, err := tx.ExecContext(ctx, query,
+		item.ID, item.BookingID, item.SparePartID, item.Quantity, item.PricePerUnit, item.Subtotal, item.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert booking spare part: %w", err)
+	}
+	return nil
+}
+
+func (r *postgresRepository) GetBookingSpareParts(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingSparePart, error) {
+	query := `
+		SELECT 
+			bsp.id, bsp.booking_id, bsp.spare_part_id, bsp.quantity, bsp.price_per_unit, bsp.subtotal, bsp.created_at,
+			sp.id, sp.workshop_id, sp.name, sp.description, sp.selling_price, sp.stock, sp.is_active
+		FROM booking_spare_parts bsp
+		JOIN spare_parts sp ON bsp.spare_part_id = sp.id
+		WHERE bsp.booking_id = $1
+		ORDER BY bsp.created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, bookingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query booking spare parts: %w", err)
+	}
+	defer rows.Close()
+
+	var list []domain.BookingSparePart
+	for rows.Next() {
+		var item domain.BookingSparePart
+		var sp domain.SparePart
+		var desc sql.NullString
+		if err := rows.Scan(
+			&item.ID, &item.BookingID, &item.SparePartID, &item.Quantity, &item.PricePerUnit, &item.Subtotal, &item.CreatedAt,
+			&sp.ID, &sp.WorkshopID, &sp.Name, &desc, &sp.SellingPrice, &sp.Stock, &sp.IsActive,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan booking spare part: %w", err)
+		}
+		if desc.Valid {
+			sp.Description = desc.String
+		}
+		item.SparePart = &sp
+		list = append(list, item)
+	}
+	return list, rows.Err()
+}
+
+func (r *postgresRepository) GetBookingSparePartsInTx(ctx context.Context, tx *sql.Tx, bookingID uuid.UUID) ([]domain.BookingSparePart, error) {
+	query := `
+		SELECT 
+			bsp.id, bsp.booking_id, bsp.spare_part_id, bsp.quantity, bsp.price_per_unit, bsp.subtotal, bsp.created_at,
+			sp.id, sp.workshop_id, sp.name, sp.description, sp.selling_price, sp.stock, sp.is_active
+		FROM booking_spare_parts bsp
+		JOIN spare_parts sp ON bsp.spare_part_id = sp.id
+		WHERE bsp.booking_id = $1
+		ORDER BY bsp.created_at ASC
+	`
+	rows, err := tx.QueryContext(ctx, query, bookingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query booking spare parts in tx: %w", err)
+	}
+	defer rows.Close()
+
+	var list []domain.BookingSparePart
+	for rows.Next() {
+		var item domain.BookingSparePart
+		var sp domain.SparePart
+		var desc sql.NullString
+		if err := rows.Scan(
+			&item.ID, &item.BookingID, &item.SparePartID, &item.Quantity, &item.PricePerUnit, &item.Subtotal, &item.CreatedAt,
+			&sp.ID, &sp.WorkshopID, &sp.Name, &desc, &sp.SellingPrice, &sp.Stock, &sp.IsActive,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan booking spare part: %w", err)
+		}
+		if desc.Valid {
+			sp.Description = desc.String
+		}
+		item.SparePart = &sp
+		list = append(list, item)
+	}
+	return list, rows.Err()
 }

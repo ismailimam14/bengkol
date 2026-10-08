@@ -173,3 +173,81 @@ func TestHandler_Booking_ListMyBookings(t *testing.T) {
 		t.Fatalf("expected status 200 on list my bookings, got %d", rec.Code)
 	}
 }
+
+func TestHandler_Booking_CreateWithSpareParts(t *testing.T) {
+	app, repo, jwtMgr := setupTestAppWithBooking()
+
+	wsID := uuid.New()
+	srvID := uuid.New()
+	spID := uuid.New()
+	customerID := uuid.New()
+
+	customer := &domain.User{ID: customerID, Email: "customer_parts@bengkol.com", Role: domain.RoleCustomer}
+	customerTokens, _, _ := jwtMgr.GenerateTokenPair(customer)
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 80000, DurationMinutes: 45, IsActive: true}
+	repo.spareParts[spID] = &domain.SparePart{
+		ID:           spID,
+		WorkshopID:   wsID,
+		Name:         "Oli Mesin 0.8L",
+		SellingPrice: 55000,
+		Stock:        10,
+		IsActive:     true,
+	}
+	repo.operatingHours[wsID.String()+":1"] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+
+	mondayDate := getNextMonday()
+	createPayload := map[string]interface{}{
+		"workshop_id":  wsID.String(),
+		"service_id":   srvID.String(),
+		"booking_date": mondayDate,
+		"booking_time": "11:00:00",
+		"spare_parts": []map[string]interface{}{
+			{
+				"spare_part_id": spID.String(),
+				"quantity":      2,
+			},
+		},
+	}
+	body, _ := json.Marshal(createPayload)
+
+	reqCreate := httptest.NewRequest(http.MethodPost, "/api/v1/bookings", bytes.NewReader(body))
+	reqCreate.Header.Set("Authorization", "Bearer "+customerTokens.AccessToken)
+	reqCreate.Header.Set("Content-Type", "application/json")
+	recCreate := httptest.NewRecorder()
+
+	app.ServeHTTP(recCreate, reqCreate)
+	if recCreate.Code != http.StatusCreated {
+		t.Fatalf("expected status 201 on create booking with spare parts, got %d: %s", recCreate.Code, recCreate.Body.String())
+	}
+
+	var createResp struct {
+		Success bool            `json:"success"`
+		Data    *domain.Booking `json:"data"`
+	}
+	_ = json.Unmarshal(recCreate.Body.Bytes(), &createResp)
+
+	// Service 80,000 + (55,000 * 2) = 190,000
+	expectedTotal := 190000.0
+	if createResp.Data.TotalPrice != expectedTotal {
+		t.Errorf("expected total price %.2f, got %.2f", expectedTotal, createResp.Data.TotalPrice)
+	}
+
+	if len(createResp.Data.SpareParts) != 1 {
+		t.Fatalf("expected 1 spare part, got %d", len(createResp.Data.SpareParts))
+	}
+	if createResp.Data.SpareParts[0].Quantity != 2 {
+		t.Errorf("expected quantity 2, got %d", createResp.Data.SpareParts[0].Quantity)
+	}
+
+	// Verify stock was decremented from 10 to 8
+	if repo.spareParts[spID].Stock != 8 {
+		t.Errorf("expected stock 8, got %d", repo.spareParts[spID].Stock)
+	}
+}

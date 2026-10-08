@@ -16,12 +16,14 @@ import (
 )
 
 var (
-	ErrForbidden             = errors.New("you do not have permission to access this booking")
-	ErrValidationFailed      = errors.New("validation failed")
-	ErrWorkshopClosed        = errors.New("workshop is closed on the selected date or time")
-	ErrPastDateNotAllowed    = errors.New("cannot book a date in the past")
-	ErrServiceInactive       = errors.New("the selected service is currently inactive")
-	ErrServiceWorkshopMismatch = errors.New("the selected service does not belong to this workshop")
+	ErrForbidden                 = errors.New("you do not have permission to access this booking")
+	ErrValidationFailed          = errors.New("validation failed")
+	ErrWorkshopClosed            = errors.New("workshop is closed on the selected date or time")
+	ErrPastDateNotAllowed        = errors.New("cannot book a date in the past")
+	ErrServiceInactive           = errors.New("the selected service is currently inactive")
+	ErrServiceWorkshopMismatch   = errors.New("the selected service does not belong to this workshop")
+	ErrSparePartInactive         = errors.New("the selected spare part is currently inactive")
+	ErrSparePartWorkshopMismatch = errors.New("the selected spare part does not belong to this workshop")
 )
 
 // AvailableSlotDTO represents calculated slot capacity for clients
@@ -44,13 +46,20 @@ type AvailableSlotsResponse struct {
 	Slots      []AvailableSlotDTO `json:"slots"`
 }
 
+// BookingSparePartItemRequest represents a spare part selection when creating a booking
+type BookingSparePartItemRequest struct {
+	SparePartID uuid.UUID `json:"spare_part_id"`
+	Quantity    int       `json:"quantity"`
+}
+
 // CreateBookingRequest DTO
 type CreateBookingRequest struct {
-	WorkshopID    uuid.UUID `json:"workshop_id"`
-	ServiceID     uuid.UUID `json:"service_id"`
-	BookingDate   string    `json:"booking_date"`   // "2026-09-27"
-	BookingTime   string    `json:"booking_time"`   // "10:00:00" or "10:00"
-	CustomerNotes string    `json:"customer_notes"`
+	WorkshopID    uuid.UUID                     `json:"workshop_id"`
+	ServiceID     uuid.UUID                     `json:"service_id"`
+	BookingDate   string                        `json:"booking_date"`   // "2026-09-27"
+	BookingTime   string                        `json:"booking_time"`   // "10:00:00" or "10:00"
+	CustomerNotes string                        `json:"customer_notes"`
+	SpareParts    []BookingSparePartItemRequest `json:"spare_parts,omitempty"`
 }
 
 // Service defines booking use case operations.
@@ -180,6 +189,11 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 	v.Required("booking_date", req.BookingDate)
 	v.Required("booking_time", req.BookingTime)
 
+	for i, p := range req.SpareParts {
+		v.Check(p.SparePartID != uuid.Nil, fmt.Sprintf("spare_parts[%d].spare_part_id", i), "spare part ID is required")
+		v.Check(p.Quantity > 0, fmt.Sprintf("spare_parts[%d].quantity", i), "quantity must be greater than zero")
+	}
+
 	targetDate, err := time.Parse("2006-01-02", req.BookingDate)
 	if err != nil {
 		v.AddError("booking_date", "invalid date format; expected YYYY-MM-DD")
@@ -296,7 +310,76 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 		}
 	}
 
-	// 4. Create Booking
+	// 4. Process Spare Parts (Inventory Verification & Stock Reservation)
+	type bookedItem struct {
+		sparePart *domain.SparePart
+		quantity  int
+		price     float64
+		subtotal  float64
+	}
+	var bookedItems []bookedItem
+	var totalSparePartsPrice float64
+
+	if len(req.SpareParts) > 0 {
+		type partAgg struct {
+			id       uuid.UUID
+			quantity int
+		}
+		var orderedAgg []partAgg
+		partIndexMap := make(map[uuid.UUID]int)
+		for _, p := range req.SpareParts {
+			if idx, exists := partIndexMap[p.SparePartID]; exists {
+				orderedAgg[idx].quantity += p.Quantity
+			} else {
+				partIndexMap[p.SparePartID] = len(orderedAgg)
+				orderedAgg = append(orderedAgg, partAgg{id: p.SparePartID, quantity: p.Quantity})
+			}
+		}
+
+		for _, agg := range orderedAgg {
+			sp, err := s.repo.GetSparePartForUpdateInTx(ctx, tx, agg.id)
+			if err != nil {
+				if errors.Is(err, ErrSparePartNotFound) {
+					v.AddError("spare_parts", "spare part not found")
+					return nil, v.Errors, ErrSparePartNotFound
+				}
+				return nil, nil, err
+			}
+
+			if sp.WorkshopID != req.WorkshopID {
+				v.AddError("spare_parts", fmt.Sprintf("spare part '%s' does not belong to this workshop", sp.Name))
+				return nil, v.Errors, ErrSparePartWorkshopMismatch
+			}
+
+			if !sp.IsActive {
+				v.AddError("spare_parts", fmt.Sprintf("spare part '%s' is currently inactive", sp.Name))
+				return nil, v.Errors, ErrSparePartInactive
+			}
+
+			if sp.Stock < agg.quantity {
+				v.AddError("spare_parts", fmt.Sprintf("insufficient stock for spare part '%s' (available: %d, requested: %d)", sp.Name, sp.Stock, agg.quantity))
+				return nil, v.Errors, ErrInsufficientStock
+			}
+
+			if err := s.repo.DecrementSparePartStockInTx(ctx, tx, sp.ID, agg.quantity); err != nil {
+				return nil, nil, err
+			}
+
+			subtotal := sp.SellingPrice * float64(agg.quantity)
+			totalSparePartsPrice += subtotal
+
+			bookedItems = append(bookedItems, bookedItem{
+				sparePart: sp,
+				quantity:  agg.quantity,
+				price:     sp.SellingPrice,
+				subtotal:  subtotal,
+			})
+		}
+	}
+
+	totalPrice := srv.Price + totalSparePartsPrice
+
+	// 5. Create Booking
 	bookingNumber := generateBookingNumber(req.BookingDate)
 	booking := &domain.Booking{
 		ID:            uuid.New(),
@@ -309,6 +392,7 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 		BookingTime:   formattedStartTime,
 		Status:        domain.BookingStatusConfirmed,
 		CustomerNotes: req.CustomerNotes,
+		TotalPrice:    totalPrice,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		Workshop:      ws,
@@ -318,6 +402,26 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 	if err := s.repo.CreateBookingInTx(ctx, tx, booking); err != nil {
 		return nil, nil, err
 	}
+
+	// 6. Create Booking Spare Parts records
+	var sparePartRecords []domain.BookingSparePart
+	for _, bi := range bookedItems {
+		item := domain.BookingSparePart{
+			ID:           uuid.New(),
+			BookingID:    booking.ID,
+			SparePartID:  bi.sparePart.ID,
+			Quantity:     bi.quantity,
+			PricePerUnit: bi.price,
+			Subtotal:     bi.subtotal,
+			CreatedAt:    now,
+			SparePart:    bi.sparePart,
+		}
+		if err := s.repo.CreateBookingSparePartInTx(ctx, tx, &item); err != nil {
+			return nil, nil, err
+		}
+		sparePartRecords = append(sparePartRecords, item)
+	}
+	booking.SpareParts = sparePartRecords
 
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
@@ -330,6 +434,8 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 		"booking_number", booking.BookingNumber,
 		"customer_id", customerID,
 		"workshop_id", req.WorkshopID,
+		"spare_parts_count", len(sparePartRecords),
+		"total_price", booking.TotalPrice,
 	)
 
 	return booking, nil, nil
@@ -370,6 +476,17 @@ func (s *bookingService) CancelBooking(ctx context.Context, bookingID uuid.UUID,
 	// Decrement slot count
 	if err := s.repo.DecrementSlotBookingInTx(ctx, tx, b.SlotID); err != nil {
 		return err
+	}
+
+	// Restore booked spare parts inventory stock
+	bookedParts, err := s.repo.GetBookingSparePartsInTx(ctx, tx, bookingID)
+	if err != nil {
+		return err
+	}
+	for _, bp := range bookedParts {
+		if err := s.repo.IncrementSparePartStockInTx(ctx, tx, bp.SparePartID, bp.Quantity); err != nil {
+			return err
+		}
 	}
 
 	if tx != nil {

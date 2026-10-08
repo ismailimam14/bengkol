@@ -17,21 +17,25 @@ import (
 
 // MockBookingRepository implements booking.Repository with concurrency-safe in-memory storage
 type mockBookingRepo struct {
-	mu             sync.Mutex
-	slots          map[string]*domain.BookingSlot // key: "wsID:date:time"
-	bookings       map[uuid.UUID]*domain.Booking
-	operatingHours map[string]*domain.OperatingHour // key: "wsID:dayOfWeek"
-	workshops      map[uuid.UUID]*domain.Workshop
-	services       map[uuid.UUID]*domain.Service
+	mu                sync.Mutex
+	slots             map[string]*domain.BookingSlot // key: "wsID:date:time"
+	bookings          map[uuid.UUID]*domain.Booking
+	operatingHours    map[string]*domain.OperatingHour // key: "wsID:dayOfWeek"
+	workshops         map[uuid.UUID]*domain.Workshop
+	services          map[uuid.UUID]*domain.Service
+	spareParts        map[uuid.UUID]*domain.SparePart
+	bookingSpareParts map[uuid.UUID][]domain.BookingSparePart
 }
 
 func newMockBookingRepo() *mockBookingRepo {
 	return &mockBookingRepo{
-		slots:          make(map[string]*domain.BookingSlot),
-		bookings:       make(map[uuid.UUID]*domain.Booking),
-		operatingHours: make(map[string]*domain.OperatingHour),
-		workshops:      make(map[uuid.UUID]*domain.Workshop),
-		services:       make(map[uuid.UUID]*domain.Service),
+		slots:             make(map[string]*domain.BookingSlot),
+		bookings:          make(map[uuid.UUID]*domain.Booking),
+		operatingHours:    make(map[string]*domain.OperatingHour),
+		workshops:         make(map[uuid.UUID]*domain.Workshop),
+		services:          make(map[uuid.UUID]*domain.Service),
+		spareParts:        make(map[uuid.UUID]*domain.SparePart),
+		bookingSpareParts: make(map[uuid.UUID][]domain.BookingSparePart),
 	}
 }
 
@@ -125,6 +129,9 @@ func (m *mockBookingRepo) GetBookingByID(ctx context.Context, id uuid.UUID) (*do
 		return nil, booking.ErrBookingNotFound
 	}
 	copied := *b
+	if parts, ok := m.bookingSpareParts[id]; ok {
+		copied.SpareParts = parts
+	}
 	return &copied, nil
 }
 
@@ -208,6 +215,74 @@ func (m *mockBookingRepo) GetServiceByID(ctx context.Context, serviceID uuid.UUI
 	}
 	copied := *s
 	return &copied, nil
+}
+
+func (m *mockBookingRepo) GetSparePartForUpdateInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*domain.SparePart, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sp, ok := m.spareParts[id]
+	if !ok {
+		return nil, booking.ErrSparePartNotFound
+	}
+	copied := *sp
+	return &copied, nil
+}
+
+func (m *mockBookingRepo) DecrementSparePartStockInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID, quantity int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sp, ok := m.spareParts[id]
+	if !ok {
+		return booking.ErrSparePartNotFound
+	}
+	if sp.Stock < quantity {
+		return booking.ErrInsufficientStock
+	}
+	sp.Stock -= quantity
+	return nil
+}
+
+func (m *mockBookingRepo) IncrementSparePartStockInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID, quantity int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sp, ok := m.spareParts[id]
+	if !ok {
+		return booking.ErrSparePartNotFound
+	}
+	sp.Stock += quantity
+	return nil
+}
+
+func (m *mockBookingRepo) CreateBookingSparePartInTx(ctx context.Context, tx *sql.Tx, item *domain.BookingSparePart) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.bookingSpareParts[item.BookingID] = append(m.bookingSpareParts[item.BookingID], *item)
+	return nil
+}
+
+func (m *mockBookingRepo) GetBookingSpareParts(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingSparePart, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	parts := m.bookingSpareParts[bookingID]
+	var list []domain.BookingSparePart
+	for _, p := range parts {
+		copied := p
+		if sp, ok := m.spareParts[p.SparePartID]; ok {
+			spCopy := *sp
+			copied.SparePart = &spCopy
+		}
+		list = append(list, copied)
+	}
+	return list, nil
+}
+
+func (m *mockBookingRepo) GetBookingSparePartsInTx(ctx context.Context, tx *sql.Tx, bookingID uuid.UUID) ([]domain.BookingSparePart, error) {
+	return m.GetBookingSpareParts(ctx, bookingID)
 }
 
 func setupBookingService() (booking.Service, *mockBookingRepo) {
@@ -426,5 +501,266 @@ func TestBookingService_CancelBooking_Success(t *testing.T) {
 	slot := repo.slots[slotKey]
 	if slot.BookedCount != 0 {
 		t.Errorf("expected booked_count to be 0 after cancellation, got %d", slot.BookedCount)
+	}
+}
+
+func TestBookingService_Create_WithSpareParts_Success(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID := uuid.New()
+	customerID := uuid.New()
+	srvID := uuid.New()
+	sp1ID := uuid.New()
+	sp2ID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 100000, DurationMinutes: 60, IsActive: true}
+	repo.spareParts[sp1ID] = &domain.SparePart{
+		ID:           sp1ID,
+		WorkshopID:   wsID,
+		Name:         "Oli Mesin 1L",
+		SellingPrice: 65000,
+		Stock:        5,
+		IsActive:     true,
+	}
+	repo.spareParts[sp2ID] = &domain.SparePart{
+		ID:           sp2ID,
+		WorkshopID:   wsID,
+		Name:         "Busi Iridium",
+		SellingPrice: 45000,
+		Stock:        10,
+		IsActive:     true,
+	}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+
+	mondayDate := getNextMonday()
+	req := booking.CreateBookingRequest{
+		WorkshopID:  wsID,
+		ServiceID:   srvID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+		SpareParts: []booking.BookingSparePartItemRequest{
+			{SparePartID: sp1ID, Quantity: 2},
+			{SparePartID: sp2ID, Quantity: 1},
+		},
+	}
+
+	b, valErrors, err := svc.CreateBooking(context.Background(), customerID, req)
+	if err != nil {
+		t.Fatalf("unexpected error creating booking with spare parts: %v", err)
+	}
+	if valErrors != nil {
+		t.Fatalf("expected no validation errors, got %+v", valErrors)
+	}
+
+	// Total price should be: service 100,000 + (65,000 * 2) + (45,000 * 1) = 275,000
+	expectedTotal := 100000.0 + (65000.0 * 2) + 45000.0
+	if b.TotalPrice != expectedTotal {
+		t.Errorf("expected total price %.2f, got %.2f", expectedTotal, b.TotalPrice)
+	}
+
+	if len(b.SpareParts) != 2 {
+		t.Fatalf("expected 2 booked spare parts, got %d", len(b.SpareParts))
+	}
+
+	// Verify inventory decrement
+	if repo.spareParts[sp1ID].Stock != 3 {
+		t.Errorf("expected sp1 stock to be 3, got %d", repo.spareParts[sp1ID].Stock)
+	}
+	if repo.spareParts[sp2ID].Stock != 9 {
+		t.Errorf("expected sp2 stock to be 9, got %d", repo.spareParts[sp2ID].Stock)
+	}
+}
+
+func TestBookingService_Create_WithSpareParts_InsufficientStock(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID := uuid.New()
+	customerID := uuid.New()
+	srvID := uuid.New()
+	spID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 100000, DurationMinutes: 60, IsActive: true}
+	repo.spareParts[spID] = &domain.SparePart{
+		ID:           spID,
+		WorkshopID:   wsID,
+		Name:         "Oli Mesin 1L",
+		SellingPrice: 65000,
+		Stock:        1, // only 1 available!
+		IsActive:     true,
+	}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+
+	mondayDate := getNextMonday()
+	req := booking.CreateBookingRequest{
+		WorkshopID:  wsID,
+		ServiceID:   srvID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+		SpareParts: []booking.BookingSparePartItemRequest{
+			{SparePartID: spID, Quantity: 3}, // requesting 3
+		},
+	}
+
+	_, _, err := svc.CreateBooking(context.Background(), customerID, req)
+	if !errors.Is(err, booking.ErrInsufficientStock) {
+		t.Fatalf("expected ErrInsufficientStock, got %v", err)
+	}
+
+	// Stock should not be modified
+	if repo.spareParts[spID].Stock != 1 {
+		t.Errorf("expected stock to remain 1, got %d", repo.spareParts[spID].Stock)
+	}
+}
+
+func TestBookingService_Create_WithSpareParts_InactivePart(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID := uuid.New()
+	customerID := uuid.New()
+	srvID := uuid.New()
+	spID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 100000, DurationMinutes: 60, IsActive: true}
+	repo.spareParts[spID] = &domain.SparePart{
+		ID:           spID,
+		WorkshopID:   wsID,
+		Name:         "Oli Lama",
+		SellingPrice: 50000,
+		Stock:        10,
+		IsActive:     false, // inactive
+	}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+
+	mondayDate := getNextMonday()
+	req := booking.CreateBookingRequest{
+		WorkshopID:  wsID,
+		ServiceID:   srvID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+		SpareParts: []booking.BookingSparePartItemRequest{
+			{SparePartID: spID, Quantity: 1},
+		},
+	}
+
+	_, _, err := svc.CreateBooking(context.Background(), customerID, req)
+	if !errors.Is(err, booking.ErrSparePartInactive) {
+		t.Fatalf("expected ErrSparePartInactive, got %v", err)
+	}
+}
+
+func TestBookingService_Create_WithSpareParts_WorkshopMismatch(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID1 := uuid.New()
+	wsID2 := uuid.New()
+	customerID := uuid.New()
+	srvID := uuid.New()
+	spID := uuid.New()
+
+	repo.workshops[wsID1] = &domain.Workshop{ID: wsID1, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID1, Price: 100000, DurationMinutes: 60, IsActive: true}
+	repo.spareParts[spID] = &domain.SparePart{
+		ID:           spID,
+		WorkshopID:   wsID2, // belongs to other workshop!
+		Name:         "Oli Luar",
+		SellingPrice: 50000,
+		Stock:        10,
+		IsActive:     true,
+	}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID1)] = &domain.OperatingHour{
+		WorkshopID: wsID1,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+
+	mondayDate := getNextMonday()
+	req := booking.CreateBookingRequest{
+		WorkshopID:  wsID1,
+		ServiceID:   srvID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+		SpareParts: []booking.BookingSparePartItemRequest{
+			{SparePartID: spID, Quantity: 1},
+		},
+	}
+
+	_, _, err := svc.CreateBooking(context.Background(), customerID, req)
+	if !errors.Is(err, booking.ErrSparePartWorkshopMismatch) {
+		t.Fatalf("expected ErrSparePartWorkshopMismatch, got %v", err)
+	}
+}
+
+func TestBookingService_CancelBooking_RestoresSparePartsStock(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID := uuid.New()
+	customerID := uuid.New()
+	srvID := uuid.New()
+	spID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 100000, DurationMinutes: 60, IsActive: true}
+	repo.spareParts[spID] = &domain.SparePart{
+		ID:           spID,
+		WorkshopID:   wsID,
+		Name:         "Oli Mesin 1L",
+		SellingPrice: 65000,
+		Stock:        5,
+		IsActive:     true,
+	}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+
+	mondayDate := getNextMonday()
+	b, _, err := svc.CreateBooking(context.Background(), customerID, booking.CreateBookingRequest{
+		WorkshopID:  wsID,
+		ServiceID:   srvID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+		SpareParts: []booking.BookingSparePartItemRequest{
+			{SparePartID: spID, Quantity: 2},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error creating booking: %v", err)
+	}
+
+	// Stock decremented from 5 to 3
+	if repo.spareParts[spID].Stock != 3 {
+		t.Fatalf("expected stock to be 3, got %d", repo.spareParts[spID].Stock)
+	}
+
+	// Cancel booking
+	err = svc.CancelBooking(context.Background(), b.ID, customerID, domain.RoleCustomer)
+	if err != nil {
+		t.Fatalf("unexpected error cancelling booking: %v", err)
+	}
+
+	// Verify inventory stock restored to 5!
+	if repo.spareParts[spID].Stock != 5 {
+		t.Errorf("expected stock to be restored to 5, got %d", repo.spareParts[spID].Stock)
 	}
 }
