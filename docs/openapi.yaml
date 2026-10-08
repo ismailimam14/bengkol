@@ -387,8 +387,11 @@ paths:
 
   /api/v1/bookings:
     post:
-      summary: Book a service appointment slot
-      description: Creates a concurrency-safe slot reservation. Double-booking is strictly prevented via transactional locking.
+      summary: Book a service appointment slot (with optional spare parts)
+      description: |
+        Creates a concurrency-safe service appointment slot reservation with optional spare parts pre-order.
+        Double-booking is strictly prevented via transactional locking.
+        If spare parts are included, stock availability is verified and deducted atomically from workshop inventory.
       tags:
         - Bookings
       security:
@@ -399,6 +402,28 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateBookingRequest'
+            examples:
+              with_spare_parts:
+                summary: Booking with service and spare parts
+                value:
+                  workshop_id: "00000000-0000-0000-0000-000000000001"
+                  service_id: "00000000-0000-0000-0000-000000000002"
+                  booking_date: "2026-09-28"
+                  booking_time: "10:00:00"
+                  customer_notes: "Ganti oli mesin dan busi"
+                  spare_parts:
+                    - spare_part_id: "00000000-0000-0000-0000-000000000003"
+                      quantity: 2
+                    - spare_part_id: "00000000-0000-0000-0000-000000000004"
+                      quantity: 1
+              service_only:
+                summary: Booking service only
+                value:
+                  workshop_id: "00000000-0000-0000-0000-000000000001"
+                  service_id: "00000000-0000-0000-0000-000000000002"
+                  booking_date: "2026-09-28"
+                  booking_time: "10:00:00"
+                  customer_notes: "Servis rutin berkala"
       responses:
         '201':
           description: Booking confirmed
@@ -406,16 +431,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BookingDetailResponse'
-        '409':
-          description: Slot capacity exhausted (BOOKING_SLOT_UNAVAILABLE)
+        '400':
+          description: Workshop closed or invalid time
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Slot capacity exhausted (BOOKING_SLOT_UNAVAILABLE) or insufficient spare part stock (INSUFFICIENT_STOCK)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Input validation failed (inactive service/spare part, workshop mismatch, past date)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
 
   /api/v1/bookings/{id}:
     get:
       summary: Get booking details
+      description: Returns booking details including reserved slot, booked service, and any booked spare parts.
       tags:
         - Bookings
       security:
@@ -438,7 +476,8 @@ paths:
   /api/v1/bookings/{id}/cancel:
     post:
       summary: Cancel a booking
-      description: Cancels a reservation and restores slot capacity. Allowed for the customer, workshop owner, or admin.
+      description: |
+        Cancels an existing reservation, restores slot capacity, and automatically restores any reserved spare parts stock back to workshop inventory. Allowed for the customer, workshop owner, or admin.
       tags:
         - Bookings
       security:
@@ -452,11 +491,29 @@ paths:
             format: uuid
       responses:
         '200':
-          description: Booking cancelled
+          description: Booking cancelled and reserved stock restored
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Cannot cancel a booking that is completed or in service
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (not booking customer, workshop owner, or admin)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Booking not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/v1/me/bookings:
     get:
@@ -1823,6 +1880,54 @@ components:
         customer_notes:
           type: string
           example: "Tolong periksa kampas rem juga"
+        spare_parts:
+          type: array
+          description: Optional list of spare parts to book and reserve for this appointment.
+          items:
+            $ref: '#/components/schemas/BookingSparePartItemRequest'
+
+    BookingSparePartItemRequest:
+      type: object
+      required:
+        - spare_part_id
+        - quantity
+      properties:
+        spare_part_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          minimum: 1
+          example: 1
+
+    BookingSparePart:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        booking_id:
+          type: string
+          format: uuid
+        spare_part_id:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+          example: 1
+        price_per_unit:
+          type: number
+          format: float
+          example: 65000
+        subtotal:
+          type: number
+          format: float
+          example: 65000
+        created_at:
+          type: string
+          format: date-time
+        spare_part:
+          $ref: '#/components/schemas/SparePart'
 
     Booking:
       type: object
@@ -1855,6 +1960,11 @@ components:
           enum: [PENDING, CONFIRMED, CANCELLED, NO_SHOW, IN_SERVICE, COMPLETED]
         customer_notes:
           type: string
+        total_price:
+          type: number
+          format: float
+          description: Total price including service fee and booked spare parts.
+          example: 175000.00
         created_at:
           type: string
           format: date-time
@@ -1865,6 +1975,10 @@ components:
           $ref: '#/components/schemas/Workshop'
         service:
           $ref: '#/components/schemas/Service'
+        spare_parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/BookingSparePart'
 
     BookingDetailResponse:
       type: object
