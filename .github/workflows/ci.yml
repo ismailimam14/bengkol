@@ -1,0 +1,75 @@
+name: Continuous Integration (CI)
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - staging
+      - uat
+  pull_request:
+    branches:
+      - main
+      - develop
+      - staging
+      - uat
+
+jobs:
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Verify Dependencies
+        working-directory: backend
+        run: go mod verify
+
+      - name: Run Tests with Race Detector
+        working-directory: backend
+        run: go test -v -race -timeout 5m ./...
+
+  build:
+    name: Build Binary & Container
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: backend/go.sum
+
+      - name: Build Go API Binary
+        working-directory: backend
+        run: |
+          CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -v -o bin/bengkol-api ./cmd/api
+
+      - name: Build Docker Image
+        run: |
+          docker build -t bengkol-api:ci ./backend
+
+  verify-docs-sync:
+    name: Verify OpenAPI Docs Synchronization
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Compare OpenAPI Specs
+        run: |
+          echo "Comparing openapi.yaml and docs/openapi.yaml..."
+          diff -u openapi.yaml docs/openapi.yaml
+          echo "Comparing openapi.yaml and backend/docs/openapi.yaml..."
+          diff -u openapi.yaml backend/docs/openapi.yaml
+          echo "All OpenAPI specification files are 100% synchronized."

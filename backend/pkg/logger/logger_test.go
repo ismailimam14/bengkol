@@ -22,16 +22,26 @@ func TestLogger_StructuredOutput(t *testing.T) {
 }
 
 func TestLogger_WithContext(t *testing.T) {
-	var buf bytes.Buffer
-	log := logger.NewWithOutput("production", "info", &buf)
+	envs := []string{"production", "prod", "staging", "uat"}
 
-	ctx := context.WithValue(context.Background(), logger.RequestIDKey, "req-xyz-999")
-	ctxLog := log.WithContext(ctx)
+	for _, env := range envs {
+		t.Run(env, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := logger.NewWithOutput(env, "info", &buf)
 
-	ctxLog.Info("request processed")
+			ctx := context.WithValue(context.Background(), logger.RequestIDKey, "req-xyz-999")
+			ctxLog := log.WithContext(ctx)
 
-	output := buf.String()
-	if !strings.Contains(output, "req-xyz-999") {
-		t.Errorf("expected JSON log output to contain request_id attribute, got: %s", output)
+			ctxLog.Info("request processed")
+
+			output := buf.String()
+			if !strings.Contains(output, "req-xyz-999") {
+				t.Errorf("expected JSON log output for %s to contain request_id attribute, got: %s", env, output)
+			}
+			// Confirm JSON format has braces
+			if !strings.HasPrefix(strings.TrimSpace(output), "{") {
+				t.Errorf("expected JSON log output to start with '{' for %s, got: %s", env, output)
+			}
+		})
 	}
 }

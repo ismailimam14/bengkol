@@ -10,8 +10,14 @@ info:
 servers:
   - url: http://localhost:8080
     description: Local development server
+  - url: https://api-dev.bengkol.com
+    description: Development (Develop) environment
+  - url: https://api-uat.bengkol.com
+    description: User Acceptance Testing (UAT) environment
+  - url: https://api-staging.bengkol.com
+    description: Staging environment
   - url: https://api.bengkol.com
-    description: Production server
+    description: Production (Prod) environment
 
 paths:
   /health:

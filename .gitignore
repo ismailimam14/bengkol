@@ -9,7 +9,11 @@ uploads/
 
 # Environment local overrides
 .env
+.env.*
+.env*.local
 !.env.example
+!.env*.example
+!.env.*.example
 
 # Test and coverage artifacts
 *.out

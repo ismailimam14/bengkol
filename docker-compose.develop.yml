@@ -1,0 +1,13 @@
+# ==============================================================================
+# Docker Compose Override: DEVELOP Environment
+# Usage: docker compose -f docker-compose.yml -f docker-compose.develop.yml up -d
+# ==============================================================================
+services:
+  backend:
+    environment:
+      APP_ENV: develop
+      APP_NAME: bengkol-api-dev
+      LOG_LEVEL: debug
+      CORS_ALLOWED_ORIGINS: "*"
+    ports:
+      - "8080:8080"

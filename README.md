@@ -130,21 +130,68 @@ go test -v ./...
 
 ---
 
-## Environment Variables
+---
 
-| Variable | Default | Description |
+## Environment Variants & Multi-Stage Deployment
+
+Bengkol supports 4 standardized environment variants designed for agile continuous delivery and automated GitHub Actions deployments:
+
+| Environment | Purpose | Git Branch | Default Log Level | DB SSL Mode | Default CORS | Server Endpoint |
+|---|---|---|---|---|---|---|
+| **`develop`** | Active feature development & integration | `develop` | `debug` (Text) | `disable` | `*` (Wildcard) | `https://api-dev.bengkol.com` |
+| **`uat`** | User Acceptance Testing & QA verification | `uat` | `info` (JSON) | `disable` | Restricted UAT | `https://api-uat.bengkol.com` |
+| **`staging`** | Pre-production environment mirroring prod | `staging` | `info` (JSON) | `require` | Restricted Staging | `https://api-staging.bengkol.com` |
+| **`prod`** | Production environment with strict security | `main` | `warn` (JSON) | `require` | Restricted Prod | `https://api.bengkol.com` |
+
+### Environment Configuration Files
+Template configuration files are provided in `backend/`:
+- [`backend/.env.develop.example`](file:///c:/Users/ismai/Documents/Projects/bengkol/backend/.env.develop.example)
+- [`backend/.env.uat.example`](file:///c:/Users/ismai/Documents/Projects/bengkol/backend/.env.uat.example)
+- [`backend/.env.staging.example`](file:///c:/Users/ismai/Documents/Projects/bengkol/backend/.env.staging.example)
+- [`backend/.env.prod.example`](file:///c:/Users/ismai/Documents/Projects/bengkol/backend/.env.prod.example)
+- [`backend/.env.example`](file:///c:/Users/ismai/Documents/Projects/bengkol/backend/.env.example) (Master reference)
+
+### Running with Docker Compose Variants
+```bash
+# 1. Develop Environment (Default)
+docker compose -f docker-compose.yml -f docker-compose.develop.yml up -d
+
+# 2. UAT Environment
+docker compose -f docker-compose.yml -f docker-compose.uat.yml up -d
+
+# 3. Staging Environment
+docker compose -f docker-compose.yml -f docker-compose.staging.yml up -d
+
+# 4. Production Stack
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### GitHub Environments & CI/CD Workflows
+Bengkol includes pre-configured GitHub Actions workflows in [`.github/workflows/`](file:///c:/Users/ismai/Documents/Projects/bengkol/.github/workflows/):
+- **Continuous Integration ([`ci.yml`](file:///c:/Users/ismai/Documents/Projects/bengkol/.github/workflows/ci.yml))**: Automatically executes Go unit/integration tests with race detection, validates binary build, and confirms OpenAPI specification synchronization on PRs and pushes to `develop`, `uat`, `staging`, and `main`.
+- **Continuous Deployment ([`deploy.yml`](file:///c:/Users/ismai/Documents/Projects/bengkol/.github/workflows/deploy.yml))**: Binds directly to GitHub Environments (`develop`, `uat`, `staging`, `prod`) to enforce environment secrets and protection rules (e.g. required reviewers for `prod`). Can be triggered automatically upon branch merge or manually via `workflow_dispatch` dropdown.
+- **Documentation Deployment ([`pages.yml`](file:///c:/Users/ismai/Documents/Projects/bengkol/.github/workflows/pages.yml))**: Deploys live Swagger UI and ReDoc portals to GitHub Pages on documentation changes.
+
+---
+
+## Environment Variables Reference
+
+| Variable | Default (by Env) | Description |
 |---|---|---|
-| `APP_ENV` | `development` | Runtime environment (`development`, `production`) |
+| `APP_ENV` | `develop` | Target environment: `develop`, `uat`, `staging`, `prod` |
 | `APP_PORT` | `8080` | Port for the HTTP server |
 | `APP_NAME` | `bengkol-api` | Application service name |
-| `LOG_LEVEL` | `debug` | Log severity (`debug`, `info`, `warn`, `error`) |
-| `DB_HOST` | `localhost` | PostgreSQL host |
+| `LOG_LEVEL` | `debug` (dev) / `info` (uat/staging) / `warn` (prod) | Severity: `debug`, `info`, `warn`, `error` |
+| `CORS_ALLOWED_ORIGINS` | `*` (dev) / domains (prod/staging) | Comma-separated allowed origins or `*` |
+| `DB_HOST` | `localhost` / `postgres` | PostgreSQL host |
 | `DB_PORT` | `5432` | PostgreSQL port |
 | `DB_USER` | `postgres` | PostgreSQL username |
 | `DB_PASSWORD` | `postgrespassword` | PostgreSQL password |
 | `DB_NAME` | `bengkol_db` | Database name |
-| `DB_SSL_MODE` | `disable` | SSL mode (`disable`, `require`) |
-| `JWT_ACCESS_SECRET` | - | Secret key for signing access tokens |
-| `JWT_REFRESH_SECRET` | - | Secret key for signing refresh tokens |
+| `DB_SSL_MODE` | `disable` (dev/uat) / `require` (staging/prod) | PostgreSQL SSL mode (`disable`, `require`, `verify-full`) |
+| `DB_MAX_OPEN_CONNS` | `25` (dev) / `30` (uat) / `50` (staging) / `100` (prod) | Max open database pool connections |
+| `DB_MAX_IDLE_CONNS` | `10` (dev/uat) / `15` (staging) / `25` (prod) | Max idle database pool connections |
+| `JWT_ACCESS_SECRET` | Dev placeholder (dev) / Enforced 32+ chars (prod) | Secret key for signing access tokens |
+| `JWT_REFRESH_SECRET` | Dev placeholder (dev) / Enforced 32+ chars (prod) | Secret key for signing refresh tokens |
 | `JWT_ACCESS_EXPIRY_MINUTES` | `15` | Access token lifespan in minutes |
 | `JWT_REFRESH_EXPIRY_DAYS` | `7` | Refresh token lifespan in days |
