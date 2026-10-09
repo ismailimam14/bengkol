@@ -16,12 +16,14 @@ import (
 type mockSparePartRepo struct {
 	spareParts     map[uuid.UUID]*domain.SparePart
 	workshopOwners map[uuid.UUID]uuid.UUID // workshopID -> ownerID
+	employees      map[uuid.UUID]map[uuid.UUID]*domain.WorkshopEmployee
 }
 
 func newMockSparePartRepo() *mockSparePartRepo {
 	return &mockSparePartRepo{
 		spareParts:     make(map[uuid.UUID]*domain.SparePart),
 		workshopOwners: make(map[uuid.UUID]uuid.UUID),
+		employees:      make(map[uuid.UUID]map[uuid.UUID]*domain.WorkshopEmployee),
 	}
 }
 
@@ -86,6 +88,21 @@ func (m *mockSparePartRepo) GetSparePartOwnerID(ctx context.Context, sparePartID
 		return uuid.Nil, errors.New("workshop owner not found")
 	}
 	return ownerID, nil
+}
+
+func (m *mockSparePartRepo) GetEmployee(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error) {
+	wsEmps, ok := m.employees[workshopID]
+	if !ok {
+		return nil, nil
+	}
+	emp, ok := wsEmps[userID]
+	if !ok {
+		return nil, nil
+	}
+	copied := *emp
+	perms := copied.CalculatePermissions()
+	copied.Permissions = &perms
+	return &copied, nil
 }
 
 func setupSparePartUseCase() (sparepart.Service, *mockSparePartRepo) {
@@ -254,3 +271,92 @@ func TestSparePartUseCase_Delete(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 }
+
+func TestSparePart_EmployeeInventoryRBAC(t *testing.T) {
+	svc, repo := setupSparePartUseCase()
+	ctx := context.Background()
+
+	wsID := uuid.New()
+	ownerID := uuid.New()
+	repo.workshopOwners[wsID] = ownerID
+
+	inventoryUserID := uuid.New()
+	bothUserID := uuid.New()
+	cashierUserID := uuid.New()
+	mechanicUserID := uuid.New()
+
+	repo.employees[wsID] = map[uuid.UUID]*domain.WorkshopEmployee{
+		inventoryUserID: {
+			ID:         uuid.New(),
+			WorkshopID: wsID,
+			UserID:     &inventoryUserID,
+			Role:       domain.EmployeeRoleAdminInventory,
+			Status:     domain.EmployeeStatusActive,
+		},
+		bothUserID: {
+			ID:         uuid.New(),
+			WorkshopID: wsID,
+			UserID:     &bothUserID,
+			Role:       domain.EmployeeRoleAdminBoth,
+			Status:     domain.EmployeeStatusActive,
+		},
+		cashierUserID: {
+			ID:         uuid.New(),
+			WorkshopID: wsID,
+			UserID:     &cashierUserID,
+			Role:       domain.EmployeeRoleAdminCashier,
+			Status:     domain.EmployeeStatusActive,
+		},
+		mechanicUserID: {
+			ID:         uuid.New(),
+			WorkshopID: wsID,
+			UserID:     &mechanicUserID,
+			Role:       domain.EmployeeRoleMechanic,
+			Status:     domain.EmployeeStatusActive,
+		},
+	}
+
+	req := sparepart.CreateSparePartRequest{
+		Name:          "Brake Pads",
+		PurchasePrice: 50000,
+		SellingPrice:  75000,
+		Stock:         10,
+	}
+
+	// 1. Mechanic cannot manage inventory -> ErrForbidden
+	_, _, err := svc.CreateSparePart(ctx, wsID, mechanicUserID, domain.RoleCustomer, req)
+	if !errors.Is(err, sparepart.ErrForbidden) {
+		t.Errorf("expected ErrForbidden for Mechanic creating spare part, got %v", err)
+	}
+
+	// 2. Cashier cannot manage inventory -> ErrForbidden
+	_, _, err = svc.CreateSparePart(ctx, wsID, cashierUserID, domain.RoleCustomer, req)
+	if !errors.Is(err, sparepart.ErrForbidden) {
+		t.Errorf("expected ErrForbidden for Cashier creating spare part, got %v", err)
+	}
+
+	// 3. Admin Inventory can manage inventory -> Success
+	sp, _, err := svc.CreateSparePart(ctx, wsID, inventoryUserID, domain.RoleCustomer, req)
+	if err != nil {
+		t.Fatalf("unexpected error for Admin Inventory creating spare part: %v", err)
+	}
+
+	// 4. Admin Both can update spare part -> Success
+	newName := "Brake Pads Ceramic"
+	updated, _, err := svc.UpdateSparePart(ctx, sp.ID, bothUserID, domain.RoleCustomer, sparepart.UpdateSparePartRequest{
+		Name: &newName,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for Admin Both updating spare part: %v", err)
+	}
+	if updated.Name != newName {
+		t.Errorf("expected name %s, got %s", newName, updated.Name)
+	}
+
+	// 5. Admin Inventory can delete spare part -> Success
+	err = svc.DeleteSparePart(ctx, sp.ID, inventoryUserID, domain.RoleCustomer)
+	if err != nil {
+		t.Fatalf("unexpected error for Admin Inventory deleting spare part: %v", err)
+	}
+}
+

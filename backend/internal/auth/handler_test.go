@@ -33,7 +33,7 @@ func setupTestApp() (chi.Router, auth.Service, *security.JWTManager) {
 		AppEnv: "development",
 		CORS: config.CORSConfig{
 			AllowedOrigins: []string{"*"},
-			AllowedMethods: []string{"GET", "POST"},
+			AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
 			AllowedHeaders: []string{"Content-Type", "Authorization"},
 		},
 	}
@@ -438,3 +438,40 @@ func TestHandler_GetMe_ContextUserID(t *testing.T) {
 		t.Errorf("expected user ID %s, got %s", uID, retrievedID)
 	}
 }
+
+func TestHandler_ChangePassword(t *testing.T) {
+	app, svc, _ := setupTestApp()
+
+	regResp, _, err := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Password Change Tester",
+		Email:    "pwchange@example.com",
+		Password: "InitialPassword123!",
+		Phone:    "0877889900",
+		Role:     domain.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("failed to register user: %v", err)
+	}
+
+	accessToken := regResp.Tokens.AccessToken
+
+	// Change password via PUT /api/v1/auth/password
+	payload := auth.ChangePasswordRequest{
+		CurrentPassword: "InitialPassword123!",
+		NewPassword:     "NewPassword12345!",
+		ConfirmPassword: "NewPassword12345!",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/password", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+

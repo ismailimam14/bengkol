@@ -50,6 +50,13 @@ type AuthResponse struct {
 	Tokens *security.TokenPair `json:"tokens"`
 }
 
+// ChangePasswordRequest DTO
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+	ConfirmPassword string `json:"confirm_password,omitempty"`
+}
+
 // Service defines auth business logic methods.
 type Service interface {
 	Register(ctx context.Context, req RegisterRequest) (*AuthResponse, map[string]string, error)
@@ -57,6 +64,7 @@ type Service interface {
 	RefreshToken(ctx context.Context, req RefreshTokenRequest) (*AuthResponse, error)
 	Logout(ctx context.Context, refreshToken string) error
 	GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error)
+	ChangePassword(ctx context.Context, userID uuid.UUID, req ChangePasswordRequest) (map[string]string, error)
 }
 
 type authService struct {
@@ -310,3 +318,51 @@ func (s *authService) Logout(ctx context.Context, refreshToken string) error {
 func (s *authService) GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
 	return s.repo.GetUserByID(ctx, userID)
 }
+
+func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, req ChangePasswordRequest) (map[string]string, error) {
+	v := validator.New()
+	req.CurrentPassword = strings.TrimSpace(req.CurrentPassword)
+	req.NewPassword = strings.TrimSpace(req.NewPassword)
+	req.ConfirmPassword = strings.TrimSpace(req.ConfirmPassword)
+
+	v.Required("current_password", req.CurrentPassword)
+	v.Required("new_password", req.NewPassword)
+	v.MinLength("new_password", req.NewPassword, 8)
+
+	if req.ConfirmPassword != "" && req.ConfirmPassword != req.NewPassword {
+		v.AddError("confirm_password", "passwords do not match")
+	}
+	if req.CurrentPassword != "" && req.NewPassword != "" && req.CurrentPassword == req.NewPassword {
+		v.AddError("new_password", "new password cannot be the same as current password")
+	}
+
+	if !v.IsValid() {
+		return v.Errors, ErrValidationFailed
+	}
+
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+
+	if !security.CheckPassword(req.CurrentPassword, user.PasswordHash) {
+		v.AddError("current_password", "incorrect current password")
+		return v.Errors, ErrValidationFailed
+	}
+
+	newHash, err := security.HashPassword(req.NewPassword)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.UpdatePassword(ctx, userID, newHash); err != nil {
+		return nil, err
+	}
+
+	// Revoke all existing refresh tokens for security on password change
+	_ = s.repo.RevokeAllUserRefreshTokens(ctx, userID)
+
+	s.logger.Info("password updated successfully", "user_id", userID)
+	return nil, nil
+}
+

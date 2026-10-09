@@ -34,6 +34,8 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/login", h.Login)
 	r.Post("/refresh", h.RefreshToken)
 	r.Post("/logout", h.Logout)
+	r.With(middleware.RequireAuthenticated).Put("/password", h.ChangePassword)
+	r.With(middleware.RequireAuthenticated).Post("/change-password", h.ChangePassword)
 
 	return r
 }
@@ -151,3 +153,38 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 	response.Success(w, http.StatusOK, user)
 }
+
+// ChangePassword updates the authenticated user's password.
+func (h *Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, response.ErrCodeUnauthorized, "Authentication required")
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, response.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	valErrors, err := h.service.ChangePassword(r.Context(), userID, req)
+	if err != nil {
+		if errors.Is(err, ErrValidationFailed) {
+			response.ErrorWithDetails(w, http.StatusUnprocessableEntity, response.ErrCodeValidationFailed, "Input validation failed", valErrors)
+			return
+		}
+		if errors.Is(err, ErrUserNotFound) {
+			response.Error(w, http.StatusNotFound, response.ErrCodeNotFound, "User not found")
+			return
+		}
+		h.logger.WithContext(r.Context()).Error("failed to change password", "user_id", userID, "error", err)
+		response.Error(w, http.StatusInternalServerError, response.ErrCodeInternalServerError, "Failed to change password")
+		return
+	}
+
+	response.Success(w, http.StatusOK, map[string]string{
+		"message": "Password changed successfully",
+	})
+}
+

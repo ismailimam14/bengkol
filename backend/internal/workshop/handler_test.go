@@ -105,6 +105,15 @@ func (m *mockAuthRepoAdapter) RevokeRefreshToken(ctx context.Context, hash strin
 func (m *mockAuthRepoAdapter) RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
+func (m *mockAuthRepoAdapter) UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error {
+	for _, u := range m.users {
+		if u.ID == userID {
+			u.PasswordHash = newPasswordHash
+			return nil
+		}
+	}
+	return auth.ErrUserNotFound
+}
 
 func TestHandler_Workshop_NearbySearch(t *testing.T) {
 	app, repo, _ := setupTestAppWithWorkshop()

@@ -7,6 +7,7 @@ import (
 	"github.com/bengkol/backend/internal/auth"
 	"github.com/bengkol/backend/internal/booking"
 	"github.com/bengkol/backend/internal/domain"
+	"github.com/bengkol/backend/internal/employee"
 	"github.com/bengkol/backend/internal/history"
 	"github.com/bengkol/backend/internal/middleware"
 	"github.com/bengkol/backend/internal/notification"
@@ -31,6 +32,7 @@ type RouterConfig struct {
 	DocsHandler      *DocsHandler
 	AuthHandler      *auth.Handler
 	WorkshopHandler  *workshop.Handler
+	EmployeeHandler  *employee.Handler
 	ServiceHandler   *service.Handler
 	SparePartHandler *sparepart.Handler
 	VehicleHandler   *vehicle.Handler
@@ -99,6 +101,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			v1.Group(func(protected chi.Router) {
 				protected.Use(middleware.RequireAuthenticated)
 				protected.Get("/me", cfg.AuthHandler.GetMe)
+				protected.Put("/me/password", cfg.AuthHandler.ChangePassword)
 			})
 		}
 
@@ -126,6 +129,19 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			})
 		}
 
+		// Workshop Employee Routes (/api/v1/workshops/{id}/employees, etc.)
+		if cfg.EmployeeHandler != nil {
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+				protected.Get("/workshops/{id}/employees", cfg.EmployeeHandler.List)
+				protected.Post("/workshops/{id}/employees", cfg.EmployeeHandler.Create)
+				protected.Get("/workshops/{id}/employees/me", cfg.EmployeeHandler.GetMe)
+				protected.Get("/workshops/{id}/employees/{employeeId}", cfg.EmployeeHandler.GetByID)
+				protected.Patch("/workshops/{id}/employees/{employeeId}", cfg.EmployeeHandler.Update)
+				protected.Delete("/workshops/{id}/employees/{employeeId}", cfg.EmployeeHandler.Delete)
+			})
+		}
+
 		// Services Routes (/api/v1/workshops/:id/services and /api/v1/services/:id)
 		if cfg.ServiceHandler != nil {
 			v1.Get("/workshops/{id}/services", cfg.ServiceHandler.ListByWorkshop)
@@ -146,9 +162,9 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 			v1.Group(func(protected chi.Router) {
 				protected.Use(middleware.RequireAuthenticated)
-				protected.With(middleware.RequireRoles(domain.RoleOwner)).Post("/workshops/{id}/spare-parts", cfg.SparePartHandler.Create)
-				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Patch("/spare-parts/{id}", cfg.SparePartHandler.Update)
-				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Delete("/spare-parts/{id}", cfg.SparePartHandler.Delete)
+				protected.Post("/workshops/{id}/spare-parts", cfg.SparePartHandler.Create)
+				protected.Patch("/spare-parts/{id}", cfg.SparePartHandler.Update)
+				protected.Delete("/spare-parts/{id}", cfg.SparePartHandler.Delete)
 			})
 		}
 

@@ -106,6 +106,15 @@ func (m *mockAuthRepo) RevokeAllUserRefreshTokens(ctx context.Context, userID uu
 	return nil
 }
 
+func (m *mockAuthRepo) UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error {
+	u, ok := m.usersByID[userID]
+	if !ok {
+		return auth.ErrUserNotFound
+	}
+	u.PasswordHash = newPasswordHash
+	return nil
+}
+
 func setupAuthService() (auth.Service, *mockAuthRepo, *security.JWTManager) {
 	repo := newMockAuthRepo()
 	jwtMgr := security.NewJWTManager("test-secret-key-at-least-32-chars-long", "test-refresh-secret", 15, 7)
@@ -655,3 +664,80 @@ func TestAuthService_Logout(t *testing.T) {
 		t.Errorf("expected refresh token to be revoked after logout")
 	}
 }
+
+func TestAuthService_ChangePassword(t *testing.T) {
+	svc, repo, _ := setupAuthService()
+	ctx := context.Background()
+
+	regResp, _, err := svc.Register(ctx, auth.RegisterRequest{
+		Name:     "Test Employee",
+		Email:    "emp@example.com",
+		Password: "InitialPassword123!",
+		Phone:    "0899887766",
+		Role:     domain.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("failed to register user: %v", err)
+	}
+
+	userID := regResp.User.ID
+
+	// 1. Wrong current password -> validation error
+	valErrors, err := svc.ChangePassword(ctx, userID, auth.ChangePasswordRequest{
+		CurrentPassword: "WrongPassword!",
+		NewPassword:     "NewSecurePassword456!",
+	})
+	if !errors.Is(err, auth.ErrValidationFailed) {
+		t.Errorf("expected ErrValidationFailed for wrong password, got %v", err)
+	}
+	if valErrors["current_password"] != "incorrect current password" {
+		t.Errorf("expected 'incorrect current password' error, got %v", valErrors)
+	}
+
+	// 2. Same new password as old -> validation error
+	valErrors, err = svc.ChangePassword(ctx, userID, auth.ChangePasswordRequest{
+		CurrentPassword: "InitialPassword123!",
+		NewPassword:     "InitialPassword123!",
+	})
+	if !errors.Is(err, auth.ErrValidationFailed) {
+		t.Errorf("expected ErrValidationFailed for identical password, got %v", err)
+	}
+
+	// 3. Successful change
+	valErrors, err = svc.ChangePassword(ctx, userID, auth.ChangePasswordRequest{
+		CurrentPassword: "InitialPassword123!",
+		NewPassword:     "NewSecurePassword456!",
+		ConfirmPassword: "NewSecurePassword456!",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error changing password: %v (valErrors: %v)", err, valErrors)
+	}
+
+	// 4. Verify login succeeds with new password and fails with old
+	_, err = svc.Login(ctx, auth.LoginRequest{
+		Phone:    "0899887766",
+		Password: "InitialPassword123!",
+	})
+	if !errors.Is(err, auth.ErrInvalidCredentials) {
+		t.Errorf("expected old password to fail login, got %v", err)
+	}
+
+	loginResp, err := svc.Login(ctx, auth.LoginRequest{
+		Phone:    "0899887766",
+		Password: "NewSecurePassword456!",
+	})
+	if err != nil {
+		t.Fatalf("login failed with new password: %v", err)
+	}
+	if loginResp.User.ID != userID {
+		t.Errorf("expected user ID %s, got %s", userID, loginResp.User.ID)
+	}
+
+	// 5. Verify refresh tokens revoked
+	oldRfToken := regResp.Tokens.RefreshToken
+	stored, _ := repo.GetRefreshToken(ctx, security.HashToken(oldRfToken))
+	if !stored.Revoked {
+		t.Errorf("expected existing refresh token to be revoked upon password change")
+	}
+}
+

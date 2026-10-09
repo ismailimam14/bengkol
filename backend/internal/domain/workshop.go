@@ -30,10 +30,11 @@ type Workshop struct {
 	Rating         float64          `json:"rating"`
 	ReviewCount    int              `json:"review_count"`
 	Status         WorkshopStatus   `json:"status"`
-	OperatingHours []OperatingHour  `json:"operating_hours,omitempty"`
-	Services       []Service        `json:"services,omitempty"`
-	CreatedAt      time.Time        `json:"created_at"`
-	UpdatedAt      time.Time        `json:"updated_at"`
+	OperatingHours []OperatingHour    `json:"operating_hours,omitempty"`
+	Services       []Service          `json:"services,omitempty"`
+	Employees      []WorkshopEmployee `json:"employees,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
 }
 
 // OperatingHour represents daily operating schedules

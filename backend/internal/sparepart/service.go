@@ -59,12 +59,30 @@ func NewService(repo Repository, log *logger.Logger) Service {
 	}
 }
 
-func (s *sparePartUseCase) CreateSparePart(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, req CreateSparePartRequest) (*domain.SparePart, map[string]string, error) {
+func (s *sparePartUseCase) checkInventoryPermission(ctx context.Context, workshopID, userID uuid.UUID, role domain.UserRole) (bool, error) {
+	if role == domain.RoleAdmin {
+		return true, nil
+	}
 	ownerID, err := s.repo.GetWorkshopOwnerID(ctx, workshopID)
+	if err != nil {
+		return false, err
+	}
+	if ownerID == userID {
+		return true, nil
+	}
+	emp, err := s.repo.GetEmployee(ctx, workshopID, userID)
+	if err == nil && emp != nil && emp.CanManageInventory() {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (s *sparePartUseCase) CreateSparePart(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, req CreateSparePartRequest) (*domain.SparePart, map[string]string, error) {
+	allowed, err := s.checkInventoryPermission(ctx, workshopID, requestingUserID, requestingRole)
 	if err != nil {
 		return nil, nil, err
 	}
-	if ownerID != requestingUserID && requestingRole != domain.RoleAdmin {
+	if !allowed {
 		return nil, nil, ErrForbidden
 	}
 
@@ -118,13 +136,9 @@ func (s *sparePartUseCase) GetSparePartsByWorkshop(ctx context.Context, workshop
 	onlyActive := true
 
 	if requestingRole != nil && requestingUserID != nil {
-		if *requestingRole == domain.RoleAdmin {
+		allowed, _ := s.checkInventoryPermission(ctx, workshopID, *requestingUserID, *requestingRole)
+		if allowed {
 			onlyActive = false
-		} else if *requestingRole == domain.RoleOwner {
-			ownerID, err := s.repo.GetWorkshopOwnerID(ctx, workshopID)
-			if err == nil && ownerID == *requestingUserID {
-				onlyActive = false
-			}
 		}
 	}
 
@@ -136,17 +150,17 @@ func (s *sparePartUseCase) GetSparePartByID(ctx context.Context, id uuid.UUID) (
 }
 
 func (s *sparePartUseCase) UpdateSparePart(ctx context.Context, id uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, req UpdateSparePartRequest) (*domain.SparePart, map[string]string, error) {
-	ownerID, err := s.repo.GetSparePartOwnerID(ctx, id)
-	if err != nil {
-		return nil, nil, err
-	}
-	if ownerID != requestingUserID && requestingRole != domain.RoleAdmin {
-		return nil, nil, ErrForbidden
-	}
-
 	sp, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	allowed, err := s.checkInventoryPermission(ctx, sp.WorkshopID, requestingUserID, requestingRole)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !allowed {
+		return nil, nil, ErrForbidden
 	}
 
 	v := validator.New()
@@ -195,11 +209,16 @@ func (s *sparePartUseCase) UpdateSparePart(ctx context.Context, id uuid.UUID, re
 }
 
 func (s *sparePartUseCase) DeleteSparePart(ctx context.Context, id uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole) error {
-	ownerID, err := s.repo.GetSparePartOwnerID(ctx, id)
+	sp, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
-	if ownerID != requestingUserID && requestingRole != domain.RoleAdmin {
+
+	allowed, err := s.checkInventoryPermission(ctx, sp.WorkshopID, requestingUserID, requestingRole)
+	if err != nil {
+		return err
+	}
+	if !allowed {
 		return ErrForbidden
 	}
 
