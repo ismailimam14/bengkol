@@ -81,7 +81,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusConflict, "INSUFFICIENT_STOCK", err.Error())
 			return
 		}
-		if errors.Is(err, ErrValidationFailed) || errors.Is(err, ErrPastDateNotAllowed) || errors.Is(err, ErrServiceInactive) || errors.Is(err, ErrServiceWorkshopMismatch) || errors.Is(err, ErrSparePartNotFound) || errors.Is(err, ErrSparePartInactive) || errors.Is(err, ErrSparePartWorkshopMismatch) {
+		if errors.Is(err, ErrValidationFailed) || errors.Is(err, ErrPastDateNotAllowed) || errors.Is(err, ErrServiceInactive) || errors.Is(err, ErrServiceWorkshopMismatch) || errors.Is(err, ErrSparePartNotFound) || errors.Is(err, ErrSparePartInactive) || errors.Is(err, ErrSparePartWorkshopMismatch) || errors.Is(err, ErrVehicleNotFound) || errors.Is(err, ErrVehicleNotOwned) {
 			response.ErrorWithDetails(w, http.StatusUnprocessableEntity, response.ErrCodeValidationFailed, "Input validation failed", valErrors)
 			return
 		}

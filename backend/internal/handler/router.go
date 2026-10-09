@@ -14,6 +14,7 @@ import (
 	"github.com/bengkol/backend/internal/review"
 	"github.com/bengkol/backend/internal/service"
 	"github.com/bengkol/backend/internal/sparepart"
+	"github.com/bengkol/backend/internal/vehicle"
 	"github.com/bengkol/backend/internal/websocket"
 	"github.com/bengkol/backend/internal/workshop"
 	"github.com/bengkol/backend/pkg/logger"
@@ -32,6 +33,7 @@ type RouterConfig struct {
 	WorkshopHandler  *workshop.Handler
 	ServiceHandler   *service.Handler
 	SparePartHandler *sparepart.Handler
+	VehicleHandler   *vehicle.Handler
 	BookingHandler   *booking.Handler
 	QueueHandler     *queue.Handler
 	HistoryHandler   *history.Handler
@@ -147,6 +149,20 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 				protected.With(middleware.RequireRoles(domain.RoleOwner)).Post("/workshops/{id}/spare-parts", cfg.SparePartHandler.Create)
 				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Patch("/spare-parts/{id}", cfg.SparePartHandler.Update)
 				protected.With(middleware.RequireRoles(domain.RoleOwner, domain.RoleAdmin)).Delete("/spare-parts/{id}", cfg.SparePartHandler.Delete)
+			})
+		}
+
+		// Vehicle Routes (/api/v1/vehicles, /api/v1/vehicles/:id, /api/v1/me/vehicles)
+		if cfg.VehicleHandler != nil {
+			v1.Group(func(protected chi.Router) {
+				protected.Use(middleware.RequireAuthenticated)
+
+				protected.Post("/vehicles", cfg.VehicleHandler.Create)
+				protected.Get("/vehicles", cfg.VehicleHandler.ListMyVehicles)
+				protected.Get("/me/vehicles", cfg.VehicleHandler.ListMyVehicles)
+				protected.Get("/vehicles/{id}", cfg.VehicleHandler.GetByID)
+				protected.Patch("/vehicles/{id}", cfg.VehicleHandler.Update)
+				protected.Delete("/vehicles/{id}", cfg.VehicleHandler.Delete)
 			})
 		}
 

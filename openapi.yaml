@@ -796,6 +796,200 @@ paths:
               schema:
                 $ref: '#/components/schemas/SuccessResponse'
 
+  /api/v1/vehicles:
+    post:
+      summary: Register a new customer vehicle
+      description: Registers a new vehicle associated with the authenticated customer.
+      tags:
+        - Vehicles
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateVehicleRequest'
+      responses:
+        '201':
+          description: Vehicle registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleDetailResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+    get:
+      summary: List authenticated user's vehicles
+      tags:
+        - Vehicles
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: List of registered vehicles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleListResponse'
+
+  /api/v1/me/vehicles:
+    get:
+      summary: List authenticated user's vehicles (convenience endpoint)
+      tags:
+        - Vehicles
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 1
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: List of customer's vehicles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleListResponse'
+
+  /api/v1/vehicles/{id}:
+    get:
+      summary: Get vehicle by ID
+      tags:
+        - Vehicles
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Vehicle details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleDetailResponse'
+        '403':
+          description: Forbidden (does not own vehicle)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      summary: Update vehicle details
+      tags:
+        - Vehicles
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateVehicleRequest'
+      responses:
+        '200':
+          description: Updated vehicle details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleDetailResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+    delete:
+      summary: Delete vehicle
+      tags:
+        - Vehicles
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Vehicle deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/v1/bookings/{id}/check-in:
     post:
       summary: Check in for a confirmed booking on service day to get a queue ticket
@@ -1904,6 +2098,10 @@ components:
         service_id:
           type: string
           format: uuid
+        vehicle_id:
+          type: string
+          format: uuid
+          description: Optional vehicle ID belonging to customer to be serviced.
         booking_date:
           type: string
           format: date
@@ -1984,6 +2182,10 @@ components:
         slot_id:
           type: string
           format: uuid
+        vehicle_id:
+          type: string
+          format: uuid
+          nullable: true
         booking_date:
           type: string
           format: date
@@ -2009,6 +2211,8 @@ components:
           $ref: '#/components/schemas/Workshop'
         service:
           $ref: '#/components/schemas/Service'
+        vehicle:
+          $ref: '#/components/schemas/Vehicle'
         spare_parts:
           type: array
           items:
@@ -2033,6 +2237,121 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Booking'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
+
+    Vehicle:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        license_plate:
+          type: string
+          example: "B 1234 XYZ"
+        brand:
+          type: string
+          example: "Honda"
+        model:
+          type: string
+          example: "Vario 150"
+        year:
+          type: integer
+          example: 2022
+        vehicle_type:
+          type: string
+          enum: [MOTORCYCLE, CAR, OTHER]
+          example: "MOTORCYCLE"
+        color:
+          type: string
+          example: "Hitam"
+        notes:
+          type: string
+          example: "Servis rutin"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateVehicleRequest:
+      type: object
+      required:
+        - license_plate
+        - brand
+        - model
+      properties:
+        license_plate:
+          type: string
+          example: "B 1234 XYZ"
+        brand:
+          type: string
+          example: "Honda"
+        model:
+          type: string
+          example: "Vario 150"
+        year:
+          type: integer
+          example: 2022
+        vehicle_type:
+          type: string
+          enum: [MOTORCYCLE, CAR, OTHER]
+          default: "MOTORCYCLE"
+          example: "MOTORCYCLE"
+        color:
+          type: string
+          example: "Hitam"
+        notes:
+          type: string
+          example: "Servis rutin"
+
+    UpdateVehicleRequest:
+      type: object
+      properties:
+        license_plate:
+          type: string
+          example: "B 1234 XYZ"
+        brand:
+          type: string
+          example: "Honda"
+        model:
+          type: string
+          example: "Vario 160"
+        year:
+          type: integer
+          example: 2023
+        vehicle_type:
+          type: string
+          enum: [MOTORCYCLE, CAR, OTHER]
+        color:
+          type: string
+          example: "Merah"
+        notes:
+          type: string
+
+    VehicleDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Vehicle'
+
+    VehicleListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Vehicle'
         meta:
           $ref: '#/components/schemas/PaginationMeta'
 

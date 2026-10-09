@@ -22,6 +22,7 @@ import (
 	"github.com/bengkol/backend/internal/review"
 	"github.com/bengkol/backend/internal/service"
 	"github.com/bengkol/backend/internal/sparepart"
+	"github.com/bengkol/backend/internal/vehicle"
 	"github.com/bengkol/backend/internal/websocket"
 	"github.com/bengkol/backend/internal/workshop"
 	"github.com/bengkol/backend/pkg/logger"
@@ -100,6 +101,9 @@ func main() {
 	sparePartRepo := sparepart.NewRepository(db.DB)
 	sparePartService := sparepart.NewService(sparePartRepo, log)
 
+	vehicleRepo := vehicle.NewRepository(db.DB)
+	vehicleService := vehicle.NewService(vehicleRepo, log)
+
 	bookingRepo := booking.NewRepository(db.DB)
 	bookingService := booking.NewService(bookingRepo, log)
 
@@ -120,6 +124,7 @@ func main() {
 	workshopHandler.SetUploadDir(filepath.Join(cfg.UploadDir, "workshops"))
 	serviceHandler := service.NewHandler(serviceService, log)
 	sparePartHandler := sparepart.NewHandler(sparePartService, log)
+	vehicleHandler := vehicle.NewHandler(vehicleService, log)
 	bookingHandler := booking.NewHandler(bookingService, log)
 	queueHandler := queue.NewHandler(queueService, log)
 	historyHandler := history.NewHandler(historyService, log)
@@ -137,6 +142,7 @@ func main() {
 		WorkshopHandler:  workshopHandler,
 		ServiceHandler:   serviceHandler,
 		SparePartHandler: sparePartHandler,
+		VehicleHandler:   vehicleHandler,
 		BookingHandler:   bookingHandler,
 		QueueHandler:     queueHandler,
 		HistoryHandler:   historyHandler,
