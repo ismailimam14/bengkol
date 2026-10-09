@@ -32,6 +32,9 @@ type Repository interface {
 	Update(ctx context.Context, emp *domain.WorkshopEmployee) error
 	Delete(ctx context.Context, workshopID, employeeID uuid.UUID) error
 	GetWorkshopOwnerID(ctx context.Context, workshopID uuid.UUID) (uuid.UUID, error)
+	FindUserByPhone(ctx context.Context, phone string) (*domain.User, error)
+	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
+	CreateUser(ctx context.Context, user *domain.User) error
 }
 
 type postgresRepository struct {
@@ -304,3 +307,93 @@ func (r *postgresRepository) Delete(ctx context.Context, workshopID, employeeID 
 	}
 	return nil
 }
+
+func (r *postgresRepository) FindUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return nil, nil
+	}
+	query := `
+		SELECT id, COALESCE(email, ''), password_hash, name, phone, role, created_at, updated_at
+		FROM users
+		WHERE phone = $1
+		LIMIT 1
+	`
+	var u domain.User
+	err := r.db.QueryRowContext(ctx, query, trimmed).Scan(
+		&u.ID,
+		&u.Email,
+		&u.PasswordHash,
+		&u.Name,
+		&u.Phone,
+		&u.Role,
+		&u.CreatedAt,
+		&u.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query user by phone: %w", err)
+	}
+	return &u, nil
+}
+
+func (r *postgresRepository) FindUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	trimmed := strings.ToLower(strings.TrimSpace(email))
+	if trimmed == "" {
+		return nil, nil
+	}
+	query := `
+		SELECT id, COALESCE(email, ''), password_hash, name, phone, role, created_at, updated_at
+		FROM users
+		WHERE email IS NOT NULL AND LOWER(email) = LOWER($1)
+		LIMIT 1
+	`
+	var u domain.User
+	err := r.db.QueryRowContext(ctx, query, trimmed).Scan(
+		&u.ID,
+		&u.Email,
+		&u.PasswordHash,
+		&u.Name,
+		&u.Phone,
+		&u.Role,
+		&u.CreatedAt,
+		&u.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query user by email: %w", err)
+	}
+	return &u, nil
+}
+
+func (r *postgresRepository) CreateUser(ctx context.Context, user *domain.User) error {
+	query := `
+		INSERT INTO users (id, email, password_hash, name, phone, role, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+	var email *string
+	if strings.TrimSpace(user.Email) != "" {
+		trimmed := strings.ToLower(strings.TrimSpace(user.Email))
+		email = &trimmed
+	}
+
+	_, err := r.db.ExecContext(ctx, query,
+		user.ID,
+		email,
+		user.PasswordHash,
+		user.Name,
+		user.Phone,
+		user.Role,
+		user.CreatedAt,
+		user.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to insert user for employee: %w", err)
+	}
+	return nil
+}
+

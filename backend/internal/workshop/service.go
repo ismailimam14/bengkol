@@ -10,6 +10,7 @@ import (
 	"github.com/bengkol/backend/internal/domain"
 	"github.com/bengkol/backend/pkg/logger"
 	"github.com/bengkol/backend/pkg/response"
+	"github.com/bengkol/backend/pkg/security"
 	"github.com/bengkol/backend/pkg/validator"
 	"github.com/google/uuid"
 )
@@ -143,16 +144,24 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 			v.AddError(fmt.Sprintf("employees[%d].role", i), "invalid employee role; must be MECHANIC, ADMIN_CASHIER, ADMIN_INVENTORY, ADMIN_BOTH, MANAGER, or OWNER")
 		}
 		if v.IsValid() {
+			var initialPassword string
+			if emp.UserID == nil {
+				genPass, err := security.GenerateRandomPassword(10)
+				if err == nil {
+					initialPassword = genPass
+				}
+			}
 			we := domain.WorkshopEmployee{
-				ID:             uuid.New(),
-				UserID:         emp.UserID,
-				Name:           empName,
-				Email:          strings.TrimSpace(emp.Email),
-				Phone:          empPhone,
-				Role:           normRole,
-				Status:         domain.EmployeeStatusActive,
-				Specialization: strings.TrimSpace(emp.Specialization),
-				Notes:          strings.TrimSpace(emp.Notes),
+				ID:              uuid.New(),
+				UserID:          emp.UserID,
+				Name:            empName,
+				Email:           strings.TrimSpace(emp.Email),
+				Phone:           empPhone,
+				Role:            normRole,
+				Status:          domain.EmployeeStatusActive,
+				Specialization:  strings.TrimSpace(emp.Specialization),
+				Notes:           strings.TrimSpace(emp.Notes),
+				InitialPassword: initialPassword,
 			}
 			validEmployees = append(validEmployees, we)
 		}

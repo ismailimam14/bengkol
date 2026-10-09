@@ -16,12 +16,18 @@ import (
 type mockEmployeeRepo struct {
 	workshopOwners map[uuid.UUID]uuid.UUID
 	employees      map[uuid.UUID]map[uuid.UUID]*domain.WorkshopEmployee
+	users          map[string]*domain.User
+	usersByPhone   map[string]*domain.User
+	usersByID      map[uuid.UUID]*domain.User
 }
 
 func newMockEmployeeRepo() *mockEmployeeRepo {
 	return &mockEmployeeRepo{
 		workshopOwners: make(map[uuid.UUID]uuid.UUID),
 		employees:      make(map[uuid.UUID]map[uuid.UUID]*domain.WorkshopEmployee),
+		users:          make(map[string]*domain.User),
+		usersByPhone:   make(map[string]*domain.User),
+		usersByID:      make(map[uuid.UUID]*domain.User),
 	}
 }
 
@@ -121,6 +127,33 @@ func (m *mockEmployeeRepo) Delete(ctx context.Context, workshopID, employeeID uu
 	return nil
 }
 
+func (m *mockEmployeeRepo) FindUserByPhone(ctx context.Context, phone string) (*domain.User, error) {
+	u, ok := m.usersByPhone[phone]
+	if !ok {
+		return nil, nil
+	}
+	return u, nil
+}
+
+func (m *mockEmployeeRepo) FindUserByEmail(ctx context.Context, email string) (*domain.User, error) {
+	u, ok := m.users[email]
+	if !ok {
+		return nil, nil
+	}
+	return u, nil
+}
+
+func (m *mockEmployeeRepo) CreateUser(ctx context.Context, user *domain.User) error {
+	m.usersByID[user.ID] = user
+	if user.Phone != "" {
+		m.usersByPhone[user.Phone] = user
+	}
+	if user.Email != "" {
+		m.users[user.Email] = user
+	}
+	return nil
+}
+
 func setupEmployeeService() (employee.Service, *mockEmployeeRepo) {
 	repo := newMockEmployeeRepo()
 	var buf bytes.Buffer
@@ -153,6 +186,14 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 	}
 	if emp.Permissions == nil || !emp.Permissions.CanAccessRepairJobs || emp.Permissions.CanManageInventory {
 		t.Errorf("incorrect permissions for mechanic: %+v", emp.Permissions)
+	}
+	if emp.InitialPassword == "" {
+		t.Errorf("expected initial password to be generated")
+	}
+	if emp.UserID == nil {
+		t.Errorf("expected user ID to be assigned to new employee")
+	} else if repo.usersByPhone[emp.Phone] == nil {
+		t.Errorf("expected user account to be created for employee")
 	}
 
 	// 2. Setup a Manager employee with a user ID

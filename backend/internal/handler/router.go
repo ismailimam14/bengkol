@@ -101,6 +101,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			v1.Group(func(protected chi.Router) {
 				protected.Use(middleware.RequireAuthenticated)
 				protected.Get("/me", cfg.AuthHandler.GetMe)
+				protected.Put("/me/password", cfg.AuthHandler.ChangePassword)
 			})
 		}
 

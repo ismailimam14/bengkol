@@ -46,11 +46,12 @@ type WorkshopEmployee struct {
 	Phone          string               `json:"phone"`
 	Role           EmployeeRole         `json:"role"`
 	Status         EmployeeStatus       `json:"status"`
-	Specialization string               `json:"specialization,omitempty"`
-	Notes          string               `json:"notes,omitempty"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
-	Permissions    *EmployeePermissions `json:"permissions,omitempty"`
+	Specialization  string               `json:"specialization,omitempty"`
+	Notes           string               `json:"notes,omitempty"`
+	InitialPassword string               `json:"initial_password,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	Permissions     *EmployeePermissions `json:"permissions,omitempty"`
 
 	// Relational references
 	User     *User     `json:"user,omitempty"`

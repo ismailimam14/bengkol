@@ -3,12 +3,14 @@ package employee
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/bengkol/backend/internal/domain"
 	"github.com/bengkol/backend/pkg/logger"
 	"github.com/bengkol/backend/pkg/response"
+	"github.com/bengkol/backend/pkg/security"
 	"github.com/bengkol/backend/pkg/validator"
 	"github.com/google/uuid"
 )
@@ -141,19 +143,67 @@ func (s *employeeService) CreateEmployee(ctx context.Context, workshopID, caller
 	}
 
 	now := time.Now().UTC()
+
+	var initialPassword string
+	userID := req.UserID
+
+	if userID == nil {
+		// Look up existing user by phone or email
+		existingUser, err := s.repo.FindUserByPhone(ctx, req.Phone)
+		if err == nil && existingUser != nil {
+			userID = &existingUser.ID
+		} else if req.Email != "" {
+			existingUser, err = s.repo.FindUserByEmail(ctx, req.Email)
+			if err == nil && existingUser != nil {
+				userID = &existingUser.ID
+			}
+		}
+
+		// If user doesn't exist, generate password and create user account so they can log in
+		if userID == nil {
+			genPass, err := security.GenerateRandomPassword(10)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to generate initial password: %w", err)
+			}
+			initialPassword = genPass
+			passHash, err := security.HashPassword(genPass)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to hash initial password: %w", err)
+			}
+
+			newUserID := uuid.New()
+			user := &domain.User{
+				ID:           newUserID,
+				Email:        req.Email,
+				PasswordHash: passHash,
+				Name:         req.Name,
+				Phone:        req.Phone,
+				Role:         domain.RoleCustomer,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+			if err := s.repo.CreateUser(ctx, user); err != nil {
+				s.logger.WithContext(ctx).Error("failed to create user account for employee", "error", err)
+				return nil, nil, err
+			}
+			userID = &newUserID
+		}
+	}
+
 	emp := &domain.WorkshopEmployee{
-		ID:             uuid.New(),
-		WorkshopID:     workshopID,
-		UserID:         req.UserID,
-		Name:           req.Name,
-		Email:          req.Email,
-		Phone:          req.Phone,
-		Role:           normRole,
-		Status:         status,
-		Specialization: strings.TrimSpace(req.Specialization),
-		Notes:          strings.TrimSpace(req.Notes),
-		CreatedAt:      now,
-		UpdatedAt:      now,
+		ID:              uuid.New(),
+		WorkshopID:      workshopID,
+		UserID:          userID,
+		Name:            req.Name,
+		Email:           req.Email,
+		Phone:           req.Phone,
+		Role:            normRole,
+		Status:          status,
+		Specialization:  strings.TrimSpace(req.Specialization),
+		Notes:           strings.TrimSpace(req.Notes),
+		InitialPassword: initialPassword,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 
 	if err := s.repo.Create(ctx, emp); err != nil {

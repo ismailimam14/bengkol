@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bengkol/backend/internal/domain"
 	"github.com/google/uuid"
@@ -27,6 +28,7 @@ type Repository interface {
 	GetRefreshToken(ctx context.Context, tokenHash string) (*domain.RefreshToken, error)
 	RevokeRefreshToken(ctx context.Context, tokenHash string) error
 	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error
+	UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error
 }
 
 type postgresRepository struct {
@@ -227,3 +229,24 @@ func (r *postgresRepository) RevokeAllUserRefreshTokens(ctx context.Context, use
 	}
 	return nil
 }
+
+func (r *postgresRepository) UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error {
+	query := `
+		UPDATE users
+		SET password_hash = $1, updated_at = $2
+		WHERE id = $3
+	`
+	res, err := r.db.ExecContext(ctx, query, newPasswordHash, time.Now().UTC(), userID)
+	if err != nil {
+		return fmt.Errorf("failed to update user password: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+

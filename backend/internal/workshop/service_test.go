@@ -574,8 +574,11 @@ func TestCreateWorkshop_WithInitialEmployees(t *testing.T) {
 		t.Fatalf("expected 5 employees, got %d", len(ws.Employees))
 	}
 
-	// Verify permissions calculated
+	// Verify generated initial passwords and permissions calculated
 	for _, emp := range ws.Employees {
+		if emp.InitialPassword == "" {
+			t.Errorf("expected initial password to be generated for %s, got empty", emp.Name)
+		}
 		if emp.Permissions == nil {
 			t.Errorf("expected permissions to be populated for %s", emp.Name)
 			continue

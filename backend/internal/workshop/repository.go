@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/bengkol/backend/internal/domain"
+	"github.com/bengkol/backend/pkg/security"
 	"github.com/google/uuid"
 )
 
@@ -562,12 +563,44 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 		if updatedAt.IsZero() {
 			updatedAt = createdAt
 		}
+
+		userID := emp.UserID
+		if userID == nil {
+			var existingID uuid.UUID
+			err := r.db.QueryRowContext(ctx, "SELECT id FROM users WHERE phone = $1 LIMIT 1", emp.Phone).Scan(&existingID)
+			if err == nil {
+				userID = &existingID
+			} else if emp.Email != "" {
+				err = r.db.QueryRowContext(ctx, "SELECT id FROM users WHERE email IS NOT NULL AND LOWER(email) = LOWER($1) LIMIT 1", emp.Email).Scan(&existingID)
+				if err == nil {
+					userID = &existingID
+				}
+			}
+			if userID == nil {
+				newID := uuid.New()
+				pass := emp.InitialPassword
+				if pass == "" {
+					pass, _ = security.GenerateRandomPassword(10)
+				}
+				passHash, _ := security.HashPassword(pass)
+				var email *string
+				if emp.Email != "" {
+					email = &emp.Email
+				}
+				_, _ = r.db.ExecContext(ctx, `
+					INSERT INTO users (id, email, password_hash, name, phone, role, created_at, updated_at)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				`, newID, email, passHash, emp.Name, emp.Phone, string(domain.RoleCustomer), createdAt, updatedAt)
+				userID = &newID
+			}
+		}
+
 		_, err := r.db.ExecContext(
 			ctx,
 			query,
 			id,
 			workshopID,
-			emp.UserID,
+			userID,
 			emp.Name,
 			emp.Email,
 			emp.Phone,
