@@ -24,6 +24,8 @@ var (
 	ErrServiceWorkshopMismatch   = errors.New("the selected service does not belong to this workshop")
 	ErrSparePartInactive         = errors.New("the selected spare part is currently inactive")
 	ErrSparePartWorkshopMismatch = errors.New("the selected spare part does not belong to this workshop")
+	ErrVehicleNotFound           = errors.New("vehicle not found")
+	ErrVehicleNotOwned            = errors.New("the selected vehicle does not belong to this customer")
 )
 
 // AvailableSlotDTO represents calculated slot capacity for clients
@@ -56,6 +58,7 @@ type BookingSparePartItemRequest struct {
 type CreateBookingRequest struct {
 	WorkshopID    uuid.UUID                     `json:"workshop_id"`
 	ServiceID     uuid.UUID                     `json:"service_id"`
+	VehicleID     *uuid.UUID                    `json:"vehicle_id,omitempty"`
 	BookingDate   string                        `json:"booking_date"`   // "2026-09-27"
 	BookingTime   string                        `json:"booking_time"`   // "10:00:00" or "10:00"
 	CustomerNotes string                        `json:"customer_notes"`
@@ -237,7 +240,27 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 		return nil, v.Errors, ErrServiceInactive
 	}
 
-	// 2. Verify Operating Hours
+	// 2. Verify Vehicle (if provided)
+	var bookedVehicle *domain.Vehicle
+	if req.VehicleID != nil && *req.VehicleID != uuid.Nil {
+		veh, err := s.repo.GetVehicleByID(ctx, *req.VehicleID)
+		if err != nil {
+			if errors.Is(err, ErrVehicleNotFound) {
+				v.AddError("vehicle_id", "selected vehicle not found")
+				return nil, v.Errors, ErrVehicleNotFound
+			}
+			return nil, nil, err
+		}
+		if veh.UserID != customerID {
+			v.AddError("vehicle_id", "selected vehicle does not belong to this customer")
+			return nil, v.Errors, ErrVehicleNotOwned
+		}
+		bookedVehicle = veh
+	} else {
+		req.VehicleID = nil
+	}
+
+	// 3. Verify Operating Hours
 	dayOfWeek := int(targetDate.Weekday())
 	opHour, err := s.repo.GetWorkshopOperatingHour(ctx, req.WorkshopID, dayOfWeek)
 	if err != nil {
@@ -388,6 +411,7 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 		WorkshopID:    req.WorkshopID,
 		ServiceID:     req.ServiceID,
 		SlotID:        slotID,
+		VehicleID:     req.VehicleID,
 		BookingDate:   req.BookingDate,
 		BookingTime:   formattedStartTime,
 		Status:        domain.BookingStatusConfirmed,
@@ -397,6 +421,7 @@ func (s *bookingService) CreateBooking(ctx context.Context, customerID uuid.UUID
 		UpdatedAt:     now,
 		Workshop:      ws,
 		Service:       srv,
+		Vehicle:       bookedVehicle,
 	}
 
 	if err := s.repo.CreateBookingInTx(ctx, tx, booking); err != nil {

@@ -53,6 +53,7 @@ type Booking struct {
 	WorkshopID    uuid.UUID     `json:"workshop_id"`
 	ServiceID     uuid.UUID     `json:"service_id"`
 	SlotID        uuid.UUID     `json:"slot_id"`
+	VehicleID     *uuid.UUID    `json:"vehicle_id,omitempty"`
 	BookingDate   string        `json:"booking_date"`
 	BookingTime   string        `json:"booking_time"`
 	Status        BookingStatus `json:"status"`
@@ -63,6 +64,7 @@ type Booking struct {
 
 	// Relational references
 	Customer   *User              `json:"customer,omitempty"`
+	Vehicle    *Vehicle           `json:"vehicle,omitempty"`
 	Workshop   *Workshop          `json:"workshop,omitempty"`
 	Service    *Service           `json:"service,omitempty"`
 	SpareParts []BookingSparePart `json:"spare_parts,omitempty"`

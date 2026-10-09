@@ -38,6 +38,7 @@ type Repository interface {
 	GetWorkshopOperatingHour(ctx context.Context, workshopID uuid.UUID, dayOfWeek int) (*domain.OperatingHour, error)
 	GetWorkshopByID(ctx context.Context, workshopID uuid.UUID) (*domain.Workshop, error)
 	GetServiceByID(ctx context.Context, serviceID uuid.UUID) (*domain.Service, error)
+	GetVehicleByID(ctx context.Context, id uuid.UUID) (*domain.Vehicle, error)
 
 	GetSparePartForUpdateInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*domain.SparePart, error)
 	DecrementSparePartStockInTx(ctx context.Context, tx *sql.Tx, id uuid.UUID, quantity int) error
@@ -189,10 +190,10 @@ func (r *postgresRepository) GetSlotsByDate(ctx context.Context, workshopID uuid
 func (r *postgresRepository) CreateBookingInTx(ctx context.Context, tx *sql.Tx, b *domain.Booking) error {
 	query := `
 		INSERT INTO bookings (
-			id, booking_number, customer_id, workshop_id, service_id, slot_id,
+			id, booking_number, customer_id, workshop_id, service_id, slot_id, vehicle_id,
 			booking_date, booking_time, status, customer_notes, total_price, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 		)
 	`
 	_, err := tx.ExecContext(ctx, query,
@@ -202,6 +203,7 @@ func (r *postgresRepository) CreateBookingInTx(ctx context.Context, tx *sql.Tx, 
 		b.WorkshopID,
 		b.ServiceID,
 		b.SlotID,
+		b.VehicleID,
 		b.BookingDate,
 		b.BookingTime,
 		b.Status,
@@ -219,24 +221,31 @@ func (r *postgresRepository) CreateBookingInTx(ctx context.Context, tx *sql.Tx, 
 func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
 	query := `
 		SELECT 
-			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
+			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id, b.vehicle_id,
 			b.booking_date, b.booking_time, b.status, b.customer_notes, b.total_price, b.created_at, b.updated_at,
 			u.id, u.name, COALESCE(u.email, ''), u.phone,
 			w.id, w.name, w.address, w.phone,
-			s.id, s.name, s.price, s.duration_minutes
+			s.id, s.name, s.price, s.duration_minutes,
+			v.id, v.user_id, v.license_plate, v.brand, v.model, v.year, v.vehicle_type, v.color, v.notes, v.created_at, v.updated_at
 		FROM bookings b
 		JOIN users u ON b.customer_id = u.id
 		JOIN workshops w ON b.workshop_id = w.id
 		JOIN services s ON b.service_id = s.id
+		LEFT JOIN vehicles v ON b.vehicle_id = v.id
 		WHERE b.id = $1
 	`
 	var b domain.Booking
 	var bDateVal time.Time
 	var notes sql.NullString
+	var bVehicleID sql.NullString
 
 	var u domain.User
 	var w domain.Workshop
 	var s domain.Service
+
+	var vID, vUserID, vPlate, vBrand, vModel, vType, vColor, vNotes sql.NullString
+	var vYear sql.NullInt64
+	var vCreatedAt, vUpdatedAt sql.NullTime
 
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&b.ID,
@@ -245,6 +254,7 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 		&b.WorkshopID,
 		&b.ServiceID,
 		&b.SlotID,
+		&bVehicleID,
 		&bDateVal,
 		&b.BookingTime,
 		&b.Status,
@@ -255,6 +265,7 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 		&u.ID, &u.Name, &u.Email, &u.Phone,
 		&w.ID, &w.Name, &w.Address, &w.Phone,
 		&s.ID, &s.Name, &s.Price, &s.DurationMinutes,
+		&vID, &vUserID, &vPlate, &vBrand, &vModel, &vYear, &vType, &vColor, &vNotes, &vCreatedAt, &vUpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -266,6 +277,12 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 	if notes.Valid {
 		b.CustomerNotes = notes.String
 	}
+	if bVehicleID.Valid {
+		if parsedVID, err := uuid.Parse(bVehicleID.String); err == nil {
+			b.VehicleID = &parsedVID
+		}
+	}
+	b.Vehicle = scanVehicleFromNulls(vID, vUserID, vPlate, vBrand, vModel, vType, vColor, vNotes, vYear, vCreatedAt, vUpdatedAt)
 	b.Customer = &u
 	b.Workshop = &w
 	b.Service = &s
@@ -280,7 +297,7 @@ func (r *postgresRepository) GetBookingByID(ctx context.Context, id uuid.UUID) (
 
 func (r *postgresRepository) GetBookingByIDForUpdate(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*domain.Booking, error) {
 	query := `
-		SELECT id, booking_number, customer_id, workshop_id, service_id, slot_id, booking_date, booking_time, status, customer_notes, total_price, created_at, updated_at
+		SELECT id, booking_number, customer_id, workshop_id, service_id, slot_id, vehicle_id, booking_date, booking_time, status, customer_notes, total_price, created_at, updated_at
 		FROM bookings
 		WHERE id = $1
 		FOR UPDATE
@@ -288,6 +305,7 @@ func (r *postgresRepository) GetBookingByIDForUpdate(ctx context.Context, tx *sq
 	var b domain.Booking
 	var bDateVal time.Time
 	var notes sql.NullString
+	var bVehicleID sql.NullString
 
 	err := tx.QueryRowContext(ctx, query, id).Scan(
 		&b.ID,
@@ -296,6 +314,7 @@ func (r *postgresRepository) GetBookingByIDForUpdate(ctx context.Context, tx *sq
 		&b.WorkshopID,
 		&b.ServiceID,
 		&b.SlotID,
+		&bVehicleID,
 		&bDateVal,
 		&b.BookingTime,
 		&b.Status,
@@ -313,6 +332,11 @@ func (r *postgresRepository) GetBookingByIDForUpdate(ctx context.Context, tx *sq
 	b.BookingDate = bDateVal.Format("2006-01-02")
 	if notes.Valid {
 		b.CustomerNotes = notes.String
+	}
+	if bVehicleID.Valid {
+		if parsedVID, err := uuid.Parse(bVehicleID.String); err == nil {
+			b.VehicleID = &parsedVID
+		}
 	}
 	return &b, nil
 }
@@ -339,13 +363,15 @@ func (r *postgresRepository) ListByCustomer(ctx context.Context, customerID uuid
 
 	query := `
 		SELECT 
-			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
+			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id, b.vehicle_id,
 			b.booking_date, b.booking_time, b.status, b.customer_notes, b.total_price, b.created_at, b.updated_at,
 			w.id, w.name, w.address, w.phone,
-			s.id, s.name, s.price, s.duration_minutes
+			s.id, s.name, s.price, s.duration_minutes,
+			v.id, v.user_id, v.license_plate, v.brand, v.model, v.year, v.vehicle_type, v.color, v.notes, v.created_at, v.updated_at
 		FROM bookings b
 		JOIN workshops w ON b.workshop_id = w.id
 		JOIN services s ON b.service_id = s.id
+		LEFT JOIN vehicles v ON b.vehicle_id = v.id
 		WHERE b.customer_id = $1
 		ORDER BY b.booking_date DESC, b.booking_time DESC
 		LIMIT $2 OFFSET $3
@@ -361,14 +387,20 @@ func (r *postgresRepository) ListByCustomer(ctx context.Context, customerID uuid
 		var b domain.Booking
 		var bDateVal time.Time
 		var notes sql.NullString
+		var bVehicleID sql.NullString
 		var w domain.Workshop
 		var s domain.Service
 
+		var vID, vUserID, vPlate, vBrand, vModel, vType, vColor, vNotes sql.NullString
+		var vYear sql.NullInt64
+		var vCreatedAt, vUpdatedAt sql.NullTime
+
 		if err := rows.Scan(
-			&b.ID, &b.BookingNumber, &b.CustomerID, &b.WorkshopID, &b.ServiceID, &b.SlotID,
+			&b.ID, &b.BookingNumber, &b.CustomerID, &b.WorkshopID, &b.ServiceID, &b.SlotID, &bVehicleID,
 			&bDateVal, &b.BookingTime, &b.Status, &notes, &b.TotalPrice, &b.CreatedAt, &b.UpdatedAt,
 			&w.ID, &w.Name, &w.Address, &w.Phone,
 			&s.ID, &s.Name, &s.Price, &s.DurationMinutes,
+			&vID, &vUserID, &vPlate, &vBrand, &vModel, &vYear, &vType, &vColor, &vNotes, &vCreatedAt, &vUpdatedAt,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -376,6 +408,12 @@ func (r *postgresRepository) ListByCustomer(ctx context.Context, customerID uuid
 		if notes.Valid {
 			b.CustomerNotes = notes.String
 		}
+		if bVehicleID.Valid {
+			if parsedVID, err := uuid.Parse(bVehicleID.String); err == nil {
+				b.VehicleID = &parsedVID
+			}
+		}
+		b.Vehicle = scanVehicleFromNulls(vID, vUserID, vPlate, vBrand, vModel, vType, vColor, vNotes, vYear, vCreatedAt, vUpdatedAt)
 		b.Workshop = &w
 		b.Service = &s
 		list = append(list, b)
@@ -405,13 +443,15 @@ func (r *postgresRepository) ListByWorkshop(ctx context.Context, workshopID uuid
 
 	query := `
 		SELECT 
-			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id,
+			b.id, b.booking_number, b.customer_id, b.workshop_id, b.service_id, b.slot_id, b.vehicle_id,
 			b.booking_date, b.booking_time, b.status, b.customer_notes, b.total_price, b.created_at, b.updated_at,
 			u.id, u.name, COALESCE(u.email, ''), u.phone,
-			s.id, s.name, s.price, s.duration_minutes
+			s.id, s.name, s.price, s.duration_minutes,
+			v.id, v.user_id, v.license_plate, v.brand, v.model, v.year, v.vehicle_type, v.color, v.notes, v.created_at, v.updated_at
 		FROM bookings b
 		JOIN users u ON b.customer_id = u.id
 		JOIN services s ON b.service_id = s.id
+		LEFT JOIN vehicles v ON b.vehicle_id = v.id
 		WHERE b.workshop_id = $1
 	`
 	var selectArgs []interface{}
@@ -438,14 +478,20 @@ func (r *postgresRepository) ListByWorkshop(ctx context.Context, workshopID uuid
 		var b domain.Booking
 		var bDateVal time.Time
 		var notes sql.NullString
+		var bVehicleID sql.NullString
 		var u domain.User
 		var s domain.Service
 
+		var vID, vUserID, vPlate, vBrand, vModel, vType, vColor, vNotes sql.NullString
+		var vYear sql.NullInt64
+		var vCreatedAt, vUpdatedAt sql.NullTime
+
 		if err := rows.Scan(
-			&b.ID, &b.BookingNumber, &b.CustomerID, &b.WorkshopID, &b.ServiceID, &b.SlotID,
+			&b.ID, &b.BookingNumber, &b.CustomerID, &b.WorkshopID, &b.ServiceID, &b.SlotID, &bVehicleID,
 			&bDateVal, &b.BookingTime, &b.Status, &notes, &b.TotalPrice, &b.CreatedAt, &b.UpdatedAt,
 			&u.ID, &u.Name, &u.Email, &u.Phone,
 			&s.ID, &s.Name, &s.Price, &s.DurationMinutes,
+			&vID, &vUserID, &vPlate, &vBrand, &vModel, &vYear, &vType, &vColor, &vNotes, &vCreatedAt, &vUpdatedAt,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -453,6 +499,12 @@ func (r *postgresRepository) ListByWorkshop(ctx context.Context, workshopID uuid
 		if notes.Valid {
 			b.CustomerNotes = notes.String
 		}
+		if bVehicleID.Valid {
+			if parsedVID, err := uuid.Parse(bVehicleID.String); err == nil {
+				b.VehicleID = &parsedVID
+			}
+		}
+		b.Vehicle = scanVehicleFromNulls(vID, vUserID, vPlate, vBrand, vModel, vType, vColor, vNotes, vYear, vCreatedAt, vUpdatedAt)
 		b.Customer = &u
 		b.Service = &s
 		list = append(list, b)
@@ -658,4 +710,87 @@ func (r *postgresRepository) GetBookingSparePartsInTx(ctx context.Context, tx *s
 		list = append(list, item)
 	}
 	return list, rows.Err()
+}
+
+func (r *postgresRepository) GetVehicleByID(ctx context.Context, id uuid.UUID) (*domain.Vehicle, error) {
+	query := `
+		SELECT id, user_id, license_plate, brand, model, year, vehicle_type, color, notes, created_at, updated_at
+		FROM vehicles
+		WHERE id = $1
+	`
+	var v domain.Vehicle
+	var yearNull sql.NullInt64
+	var colorNull sql.NullString
+	var notesNull sql.NullString
+
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&v.ID,
+		&v.UserID,
+		&v.LicensePlate,
+		&v.Brand,
+		&v.Model,
+		&yearNull,
+		&v.VehicleType,
+		&colorNull,
+		&notesNull,
+		&v.CreatedAt,
+		&v.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrVehicleNotFound
+		}
+		return nil, fmt.Errorf("failed to query vehicle by id: %w", err)
+	}
+
+	if yearNull.Valid {
+		v.Year = int(yearNull.Int64)
+	}
+	if colorNull.Valid {
+		v.Color = colorNull.String
+	}
+	if notesNull.Valid {
+		v.Notes = notesNull.String
+	}
+
+	return &v, nil
+}
+
+func scanVehicleFromNulls(
+	vID, vUserID, vPlate, vBrand, vModel, vType, vColor, vNotes sql.NullString,
+	vYear sql.NullInt64,
+	vCreatedAt, vUpdatedAt sql.NullTime,
+) *domain.Vehicle {
+	if !vID.Valid {
+		return nil
+	}
+	id, err := uuid.Parse(vID.String)
+	if err != nil {
+		return nil
+	}
+	uID, _ := uuid.Parse(vUserID.String)
+	veh := &domain.Vehicle{
+		ID:           id,
+		UserID:       uID,
+		LicensePlate: vPlate.String,
+		Brand:        vBrand.String,
+		Model:        vModel.String,
+		VehicleType:  domain.VehicleType(vType.String),
+	}
+	if vYear.Valid {
+		veh.Year = int(vYear.Int64)
+	}
+	if vColor.Valid {
+		veh.Color = vColor.String
+	}
+	if vNotes.Valid {
+		veh.Notes = vNotes.String
+	}
+	if vCreatedAt.Valid {
+		veh.CreatedAt = vCreatedAt.Time
+	}
+	if vUpdatedAt.Valid {
+		veh.UpdatedAt = vUpdatedAt.Time
+	}
+	return veh
 }

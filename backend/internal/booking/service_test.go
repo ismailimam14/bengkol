@@ -25,6 +25,7 @@ type mockBookingRepo struct {
 	services          map[uuid.UUID]*domain.Service
 	spareParts        map[uuid.UUID]*domain.SparePart
 	bookingSpareParts map[uuid.UUID][]domain.BookingSparePart
+	vehicles          map[uuid.UUID]*domain.Vehicle
 }
 
 func newMockBookingRepo() *mockBookingRepo {
@@ -36,6 +37,7 @@ func newMockBookingRepo() *mockBookingRepo {
 		services:          make(map[uuid.UUID]*domain.Service),
 		spareParts:        make(map[uuid.UUID]*domain.SparePart),
 		bookingSpareParts: make(map[uuid.UUID][]domain.BookingSparePart),
+		vehicles:          make(map[uuid.UUID]*domain.Vehicle),
 	}
 }
 
@@ -214,6 +216,18 @@ func (m *mockBookingRepo) GetServiceByID(ctx context.Context, serviceID uuid.UUI
 		return nil, errors.New("service not found")
 	}
 	copied := *s
+	return &copied, nil
+}
+
+func (m *mockBookingRepo) GetVehicleByID(ctx context.Context, id uuid.UUID) (*domain.Vehicle, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	veh, ok := m.vehicles[id]
+	if !ok {
+		return nil, booking.ErrVehicleNotFound
+	}
+	copied := *veh
 	return &copied, nil
 }
 
@@ -762,5 +776,125 @@ func TestBookingService_CancelBooking_RestoresSparePartsStock(t *testing.T) {
 	// Verify inventory stock restored to 5!
 	if repo.spareParts[spID].Stock != 5 {
 		t.Errorf("expected stock to be restored to 5, got %d", repo.spareParts[spID].Stock)
+	}
+}
+
+func TestBookingService_Create_WithVehicle_Success(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID := uuid.New()
+	customerID := uuid.New()
+	srvID := uuid.New()
+	vehicleID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 50000, DurationMinutes: 30, IsActive: true}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+	repo.vehicles[vehicleID] = &domain.Vehicle{
+		ID:           vehicleID,
+		UserID:       customerID,
+		LicensePlate: "B 1234 XYZ",
+		Brand:        "Honda",
+		Model:        "Vario 150",
+		VehicleType:  domain.VehicleTypeMotorcycle,
+	}
+
+	mondayDate := getNextMonday()
+	b, valErrors, err := svc.CreateBooking(context.Background(), customerID, booking.CreateBookingRequest{
+		WorkshopID:  wsID,
+		ServiceID:   srvID,
+		VehicleID:   &vehicleID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+	})
+	if err != nil {
+		t.Fatalf("expected successful booking, got error %v: %v", err, valErrors)
+	}
+
+	if b.VehicleID == nil || *b.VehicleID != vehicleID {
+		t.Fatalf("expected VehicleID to be %s, got %v", vehicleID, b.VehicleID)
+	}
+	if b.Vehicle == nil || b.Vehicle.LicensePlate != "B 1234 XYZ" {
+		t.Fatalf("expected Vehicle license plate 'B 1234 XYZ', got %v", b.Vehicle)
+	}
+}
+
+func TestBookingService_Create_WithVehicle_NotFound(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID := uuid.New()
+	customerID := uuid.New()
+	srvID := uuid.New()
+	nonExistentVehicleID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 50000, DurationMinutes: 30, IsActive: true}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+
+	mondayDate := getNextMonday()
+	_, valErrors, err := svc.CreateBooking(context.Background(), customerID, booking.CreateBookingRequest{
+		WorkshopID:  wsID,
+		ServiceID:   srvID,
+		VehicleID:   &nonExistentVehicleID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+	})
+	if !errors.Is(err, booking.ErrVehicleNotFound) {
+		t.Fatalf("expected ErrVehicleNotFound, got %v", err)
+	}
+	if valErrors["vehicle_id"] == "" {
+		t.Errorf("expected vehicle_id error in validation errors, got %v", valErrors)
+	}
+}
+
+func TestBookingService_Create_WithVehicle_NotOwned(t *testing.T) {
+	svc, repo := setupBookingService()
+
+	wsID := uuid.New()
+	customerID := uuid.New()
+	otherCustomerID := uuid.New()
+	srvID := uuid.New()
+	vehicleID := uuid.New()
+
+	repo.workshops[wsID] = &domain.Workshop{ID: wsID, Status: domain.WorkshopStatusActive}
+	repo.services[srvID] = &domain.Service{ID: srvID, WorkshopID: wsID, Price: 50000, DurationMinutes: 30, IsActive: true}
+	repo.operatingHours[fmt.Sprintf("%s:1", wsID)] = &domain.OperatingHour{
+		WorkshopID: wsID,
+		DayOfWeek:  1,
+		OpenTime:   "08:00:00",
+		CloseTime:  "17:00:00",
+	}
+	repo.vehicles[vehicleID] = &domain.Vehicle{
+		ID:           vehicleID,
+		UserID:       otherCustomerID, // belongs to other user
+		LicensePlate: "B 5678 ABC",
+		Brand:        "Yamaha",
+		Model:        "NMAX",
+		VehicleType:  domain.VehicleTypeMotorcycle,
+	}
+
+	mondayDate := getNextMonday()
+	_, valErrors, err := svc.CreateBooking(context.Background(), customerID, booking.CreateBookingRequest{
+		WorkshopID:  wsID,
+		ServiceID:   srvID,
+		VehicleID:   &vehicleID,
+		BookingDate: mondayDate,
+		BookingTime: "10:00:00",
+	})
+	if !errors.Is(err, booking.ErrVehicleNotOwned) {
+		t.Fatalf("expected ErrVehicleNotOwned, got %v", err)
+	}
+	if valErrors["vehicle_id"] == "" {
+		t.Errorf("expected vehicle_id error in validation errors, got %v", valErrors)
 	}
 }
