@@ -45,6 +45,8 @@ type Repository interface {
 	GetPhotoByID(ctx context.Context, id uuid.UUID) (*domain.WorkshopPhoto, error)
 	GetPhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopPhoto, error)
 	DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error
+	CreateEmployees(ctx context.Context, workshopID uuid.UUID, employees []domain.WorkshopEmployee) error
+	GetEmployees(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopEmployee, error)
 }
 
 type postgresRepository struct {
@@ -530,5 +532,105 @@ func (r *postgresRepository) DeletePhotosByWorkshopID(ctx context.Context, works
 	query := `DELETE FROM workshop_photos WHERE workshop_id = $1`
 	_, err := r.db.ExecContext(ctx, query, workshopID)
 	return err
+}
+
+func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uuid.UUID, employees []domain.WorkshopEmployee) error {
+	if len(employees) == 0 {
+		return nil
+	}
+	query := `
+		INSERT INTO workshop_employees (
+			id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+		)
+	`
+	for _, emp := range employees {
+		id := emp.ID
+		if id == uuid.Nil {
+			id = uuid.New()
+		}
+		status := emp.Status
+		if status == "" {
+			status = domain.EmployeeStatusActive
+		}
+		createdAt := emp.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+		updatedAt := emp.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = createdAt
+		}
+		_, err := r.db.ExecContext(
+			ctx,
+			query,
+			id,
+			workshopID,
+			emp.UserID,
+			emp.Name,
+			emp.Email,
+			emp.Phone,
+			string(emp.Role),
+			string(status),
+			emp.Specialization,
+			emp.Notes,
+			createdAt,
+			updatedAt,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert workshop employee: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopEmployee, error) {
+	query := `
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		FROM workshop_employees
+		WHERE workshop_id = $1
+		ORDER BY created_at ASC
+	`
+	rows, err := r.db.QueryContext(ctx, query, workshopID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query workshop employees: %w", err)
+	}
+	defer rows.Close()
+
+	var employees []domain.WorkshopEmployee
+	for rows.Next() {
+		var emp domain.WorkshopEmployee
+		var email, specialization, notes sql.NullString
+		if err := rows.Scan(
+			&emp.ID,
+			&emp.WorkshopID,
+			&emp.UserID,
+			&emp.Name,
+			&email,
+			&emp.Phone,
+			&emp.Role,
+			&emp.Status,
+			&specialization,
+			&notes,
+			&emp.CreatedAt,
+			&emp.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan workshop employee: %w", err)
+		}
+		if email.Valid {
+			emp.Email = email.String
+		}
+		if specialization.Valid {
+			emp.Specialization = specialization.String
+		}
+		if notes.Valid {
+			emp.Notes = notes.String
+		}
+		perms := emp.CalculatePermissions()
+		emp.Permissions = &perms
+		employees = append(employees, emp)
+	}
+	return employees, rows.Err()
 }
 

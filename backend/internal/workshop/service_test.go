@@ -20,6 +20,7 @@ type mockWorkshopRepo struct {
 	workshops      map[uuid.UUID]*domain.Workshop
 	operatingHours map[uuid.UUID][]domain.OperatingHour
 	photos         map[uuid.UUID]*domain.WorkshopPhoto
+	employees      map[uuid.UUID][]domain.WorkshopEmployee
 }
 
 func newMockWorkshopRepo() *mockWorkshopRepo {
@@ -27,6 +28,7 @@ func newMockWorkshopRepo() *mockWorkshopRepo {
 		workshops:      make(map[uuid.UUID]*domain.Workshop),
 		operatingHours: make(map[uuid.UUID][]domain.OperatingHour),
 		photos:         make(map[uuid.UUID]*domain.WorkshopPhoto),
+		employees:      make(map[uuid.UUID][]domain.WorkshopEmployee),
 	}
 }
 
@@ -177,6 +179,19 @@ func (m *mockWorkshopRepo) DeletePhotosByWorkshopID(ctx context.Context, worksho
 		}
 	}
 	return nil
+}
+
+func (m *mockWorkshopRepo) CreateEmployees(ctx context.Context, workshopID uuid.UUID, employees []domain.WorkshopEmployee) error {
+	m.employees[workshopID] = append(m.employees[workshopID], employees...)
+	return nil
+}
+
+func (m *mockWorkshopRepo) GetEmployees(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopEmployee, error) {
+	emps, ok := m.employees[workshopID]
+	if !ok {
+		return []domain.WorkshopEmployee{}, nil
+	}
+	return emps, nil
 }
 
 func setupWorkshopService() (workshop.Service, *mockWorkshopRepo) {
@@ -504,6 +519,98 @@ func TestWorkshopService_Update_Photos(t *testing.T) {
 	}
 	if len(updated.Photos) != 3 || updated.Photos[0] != "https://example.com/new1.jpg" {
 		t.Errorf("expected updated photos, got %+v", updated.Photos)
+	}
+}
+
+func TestCreateWorkshop_WithInitialEmployees(t *testing.T) {
+	svc, _ := setupWorkshopService()
+	ownerID := uuid.New()
+
+	req := workshop.CreateWorkshopRequest{
+		Name:    "Workshop With Employees",
+		Address: "Jl. Sudirman No. 100",
+		Phone:   "081299998888",
+		Photos: []string{
+			"https://example.com/p1.jpg",
+			"https://example.com/p2.jpg",
+			"https://example.com/p3.jpg",
+		},
+		Employees: []workshop.CreateEmployeeInput{
+			{
+				Name:           "Budi Montir",
+				Phone:          "0811111111",
+				Role:           "MECHANIC",
+				Specialization: "Engine",
+			},
+			{
+				Name:  "Siti Kasir",
+				Phone: "0822222222",
+				Role:  "ADMIN_CASHIER",
+			},
+			{
+				Name:  "Agus Gudang",
+				Phone: "0833333333",
+				Role:  "ADMIN_INVENTORY",
+			},
+			{
+				Name:  "Rina Admin",
+				Phone: "0844444444",
+				Role:  "ADMIN_BOTH",
+			},
+			{
+				Name:  "Doni Manager",
+				Phone: "0855555555",
+				Role:  "MANAGER",
+			},
+		},
+	}
+
+	ws, valErrors, err := svc.CreateWorkshop(context.Background(), ownerID, req)
+	if err != nil {
+		t.Fatalf("unexpected error creating workshop with employees: %v (valErrors: %v)", err, valErrors)
+	}
+
+	if len(ws.Employees) != 5 {
+		t.Fatalf("expected 5 employees, got %d", len(ws.Employees))
+	}
+
+	// Verify permissions calculated
+	for _, emp := range ws.Employees {
+		if emp.Permissions == nil {
+			t.Errorf("expected permissions to be populated for %s", emp.Name)
+			continue
+		}
+		switch emp.Role {
+		case domain.EmployeeRoleMechanic:
+			if !emp.Permissions.CanAccessRepairJobs || emp.Permissions.CanAccessCashier || emp.Permissions.CanManageInventory {
+				t.Errorf("unexpected permissions for mechanic: %+v", emp.Permissions)
+			}
+		case domain.EmployeeRoleAdminCashier:
+			if !emp.Permissions.CanAccessCashier || emp.Permissions.CanManageInventory || emp.Permissions.CanAccessRepairJobs {
+				t.Errorf("unexpected permissions for cashier: %+v", emp.Permissions)
+			}
+		case domain.EmployeeRoleAdminInventory:
+			if !emp.Permissions.CanManageInventory || emp.Permissions.CanAccessCashier || emp.Permissions.CanAccessRepairJobs {
+				t.Errorf("unexpected permissions for inventory admin: %+v", emp.Permissions)
+			}
+		case domain.EmployeeRoleAdminBoth:
+			if !emp.Permissions.CanAccessCashier || !emp.Permissions.CanManageInventory || emp.Permissions.CanManageEmployees {
+				t.Errorf("unexpected permissions for admin both: %+v", emp.Permissions)
+			}
+		case domain.EmployeeRoleManager:
+			if !emp.Permissions.CanManageEmployees || !emp.Permissions.CanManageWorkshopOperations {
+				t.Errorf("unexpected permissions for manager: %+v", emp.Permissions)
+			}
+		}
+	}
+
+	// Also verify GetWorkshopByID loads employees
+	loaded, err := svc.GetWorkshopByID(context.Background(), ws.ID)
+	if err != nil {
+		t.Fatalf("unexpected error getting workshop: %v", err)
+	}
+	if len(loaded.Employees) != 5 {
+		t.Errorf("expected loaded workshop to have 5 employees, got %d", len(loaded.Employees))
 	}
 }
 

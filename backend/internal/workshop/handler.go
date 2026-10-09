@@ -282,6 +282,13 @@ func (h *Handler) parseCreateRequest(r *http.Request) (CreateWorkshopRequest, er
 			}
 		}
 
+		if employeesRaw := r.FormValue("employees"); employeesRaw != "" {
+			var employees []CreateEmployeeInput
+			if err := json.Unmarshal([]byte(employeesRaw), &employees); err == nil {
+				req.Employees = employees
+			}
+		}
+
 		var photos []string
 		var rawPhotos []RawPhotoInput
 		if r.MultipartForm != nil {

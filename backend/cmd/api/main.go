@@ -15,6 +15,7 @@ import (
 	"github.com/bengkol/backend/database"
 	"github.com/bengkol/backend/internal/auth"
 	"github.com/bengkol/backend/internal/booking"
+	"github.com/bengkol/backend/internal/employee"
 	"github.com/bengkol/backend/internal/handler"
 	"github.com/bengkol/backend/internal/history"
 	"github.com/bengkol/backend/internal/notification"
@@ -95,6 +96,9 @@ func main() {
 	workshopRepo := workshop.NewRepository(db.DB)
 	workshopService := workshop.NewService(workshopRepo, log)
 
+	employeeRepo := employee.NewRepository(db.DB)
+	employeeService := employee.NewService(employeeRepo, log)
+
 	serviceRepo := service.NewRepository(db.DB)
 	serviceService := service.NewService(serviceRepo, log)
 
@@ -122,6 +126,7 @@ func main() {
 	authHandler := auth.NewHandler(authService, log)
 	workshopHandler := workshop.NewHandler(workshopService, log)
 	workshopHandler.SetUploadDir(filepath.Join(cfg.UploadDir, "workshops"))
+	employeeHandler := employee.NewHandler(employeeService, log)
 	serviceHandler := service.NewHandler(serviceService, log)
 	sparePartHandler := sparepart.NewHandler(sparePartService, log)
 	vehicleHandler := vehicle.NewHandler(vehicleService, log)
@@ -140,6 +145,7 @@ func main() {
 		DocsHandler:      docsHandler,
 		AuthHandler:      authHandler,
 		WorkshopHandler:  workshopHandler,
+		EmployeeHandler:  employeeHandler,
 		ServiceHandler:   serviceHandler,
 		SparePartHandler: sparePartHandler,
 		VehicleHandler:   vehicleHandler,

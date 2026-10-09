@@ -27,17 +27,29 @@ type RawPhotoInput struct {
 	Filename    string
 }
 
+// CreateEmployeeInput DTO for optionally adding employees when creating a workshop
+type CreateEmployeeInput struct {
+	UserID         *uuid.UUID          `json:"user_id,omitempty"`
+	Name           string              `json:"name"`
+	Email          string              `json:"email,omitempty"`
+	Phone          string              `json:"phone"`
+	Role           domain.EmployeeRole `json:"role"`
+	Specialization string              `json:"specialization,omitempty"`
+	Notes          string              `json:"notes,omitempty"`
+}
+
 // CreateWorkshopRequest DTO
 type CreateWorkshopRequest struct {
-	Name           string               `json:"name"`
-	Description    string               `json:"description"`
-	Address        string               `json:"address"`
-	Latitude       float64              `json:"latitude"`
-	Longitude      float64              `json:"longitude"`
-	Phone          string               `json:"phone"`
-	Photos         []string             `json:"photos"`
-	RawPhotos      []RawPhotoInput      `json:"-"`
-	OperatingHours []OperatingHourInput `json:"operating_hours,omitempty"`
+	Name           string                `json:"name"`
+	Description    string                `json:"description"`
+	Address        string                `json:"address"`
+	Latitude       float64               `json:"latitude"`
+	Longitude      float64               `json:"longitude"`
+	Phone          string                `json:"phone"`
+	Photos         []string              `json:"photos"`
+	RawPhotos      []RawPhotoInput       `json:"-"`
+	OperatingHours []OperatingHourInput  `json:"operating_hours,omitempty"`
+	Employees      []CreateEmployeeInput `json:"employees,omitempty"`
 }
 
 // UpdateWorkshopRequest DTO
@@ -116,6 +128,36 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 		v.AddError("longitude", "longitude must be between -180 and 180 degrees")
 	}
 
+	var validEmployees []domain.WorkshopEmployee
+	for i, emp := range req.Employees {
+		empName := strings.TrimSpace(emp.Name)
+		empPhone := strings.TrimSpace(emp.Phone)
+		if empName == "" {
+			v.AddError(fmt.Sprintf("employees[%d].name", i), "employee name is required")
+		}
+		if empPhone == "" {
+			v.AddError(fmt.Sprintf("employees[%d].phone", i), "employee phone is required")
+		}
+		normRole, ok := domain.NormalizeEmployeeRole(string(emp.Role))
+		if !ok {
+			v.AddError(fmt.Sprintf("employees[%d].role", i), "invalid employee role; must be MECHANIC, ADMIN_CASHIER, ADMIN_INVENTORY, ADMIN_BOTH, MANAGER, or OWNER")
+		}
+		if v.IsValid() {
+			we := domain.WorkshopEmployee{
+				ID:             uuid.New(),
+				UserID:         emp.UserID,
+				Name:           empName,
+				Email:          strings.TrimSpace(emp.Email),
+				Phone:          empPhone,
+				Role:           normRole,
+				Status:         domain.EmployeeStatusActive,
+				Specialization: strings.TrimSpace(emp.Specialization),
+				Notes:          strings.TrimSpace(emp.Notes),
+			}
+			validEmployees = append(validEmployees, we)
+		}
+	}
+
 	if !v.IsValid() {
 		return nil, v.Errors, ErrValidationFailed
 	}
@@ -191,6 +233,22 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 		}
 	}
 
+	// If initial employees provided, save them
+	if len(validEmployees) > 0 {
+		for i := range validEmployees {
+			validEmployees[i].WorkshopID = ws.ID
+			validEmployees[i].CreatedAt = now
+			validEmployees[i].UpdatedAt = now
+			perms := validEmployees[i].CalculatePermissions()
+			validEmployees[i].Permissions = &perms
+		}
+		if err := s.repo.CreateEmployees(ctx, ws.ID, validEmployees); err != nil {
+			s.logger.WithContext(ctx).Warn("failed to save initial workshop employees", "workshop_id", ws.ID, "error", err)
+		} else {
+			ws.Employees = validEmployees
+		}
+	}
+
 	s.logger.WithContext(ctx).Info("workshop created successfully", "workshop_id", ws.ID, "owner_id", ownerID)
 	return ws, nil, nil
 }
@@ -208,6 +266,11 @@ func (s *workshopService) GetWorkshopByID(ctx context.Context, id uuid.UUID) (*d
 	hours, err := s.repo.GetOperatingHours(ctx, id)
 	if err == nil {
 		ws.OperatingHours = hours
+	}
+
+	employees, err := s.repo.GetEmployees(ctx, id)
+	if err == nil && len(employees) > 0 {
+		ws.Employees = employees
 	}
 
 	return ws, nil

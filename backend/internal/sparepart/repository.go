@@ -23,6 +23,7 @@ type Repository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	GetWorkshopOwnerID(ctx context.Context, workshopID uuid.UUID) (uuid.UUID, error)
 	GetSparePartOwnerID(ctx context.Context, sparePartID uuid.UUID) (uuid.UUID, error)
+	GetEmployee(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error)
 }
 
 type postgresRepository struct {
@@ -208,3 +209,47 @@ func (r *postgresRepository) GetSparePartOwnerID(ctx context.Context, sparePartI
 	}
 	return ownerID, nil
 }
+
+func (r *postgresRepository) GetEmployee(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error) {
+	query := `
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		FROM workshop_employees
+		WHERE workshop_id = $1 AND user_id = $2
+		LIMIT 1
+	`
+	var emp domain.WorkshopEmployee
+	var email, specialization, notes sql.NullString
+	err := r.db.QueryRowContext(ctx, query, workshopID, userID).Scan(
+		&emp.ID,
+		&emp.WorkshopID,
+		&emp.UserID,
+		&emp.Name,
+		&email,
+		&emp.Phone,
+		&emp.Role,
+		&emp.Status,
+		&specialization,
+		&notes,
+		&emp.CreatedAt,
+		&emp.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query workshop employee: %w", err)
+	}
+	if email.Valid {
+		emp.Email = email.String
+	}
+	if specialization.Valid {
+		emp.Specialization = specialization.String
+	}
+	if notes.Valid {
+		emp.Notes = notes.String
+	}
+	perms := emp.CalculatePermissions()
+	emp.Permissions = &perms
+	return &emp, nil
+}
+

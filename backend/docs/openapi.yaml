@@ -364,6 +364,313 @@ paths:
               schema:
                 $ref: '#/components/schemas/OperatingHoursResponse'
 
+  /api/v1/workshops/{id}/employees:
+    get:
+      summary: List employees for a workshop
+      description: Returns a paginated list of employees for the specified workshop. Accessible by owner, admin, or active workshop employees.
+      tags:
+        - Employees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: query
+          name: page
+          schema:
+            type: integer
+        - in: query
+          name: pageSize
+          schema:
+            type: integer
+        - in: query
+          name: role
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: search
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of workshop employees
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeListResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Workshop not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Add a new employee to a workshop
+      description: Adds an employee to the workshop. Accessible by workshop owner, manager, or system admin. Managers cannot assign the OWNER role.
+      tags:
+        - Employees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEmployeeRequest'
+      responses:
+        '201':
+          description: Employee added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeDetailResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+
+  /api/v1/workshops/{id}/employees/me:
+    get:
+      summary: Get caller's employee profile and permissions in workshop
+      description: Returns the authenticated user's active employee role and calculated permissions for the workshop.
+      tags:
+        - Employees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current employee profile and permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeDetailResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: User is not an employee of this workshop
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/workshops/{id}/employees/{employeeId}:
+    get:
+      summary: Get workshop employee by ID
+      tags:
+        - Employees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: employeeId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Employee details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeDetailResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden access
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Employee not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      summary: Update workshop employee
+      description: Updates employee role, contact info, specialization, status, or notes. Managers cannot modify workshop owners.
+      tags:
+        - Employees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: employeeId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEmployeeRequest'
+      responses:
+        '200':
+          description: Employee updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmployeeDetailResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Employee not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+    delete:
+      summary: Delete or remove employee from workshop
+      description: Removes employee from workshop. Managers cannot delete workshop owners. Employees cannot delete themselves.
+      tags:
+        - Employees
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: employeeId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Employee successfully deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Cannot delete own employee record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Employee not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/v1/workshops/{id}/available-slots:
     get:
       summary: Get available booking slots for a workshop on a date
@@ -2429,6 +2736,11 @@ components:
             - "https://example.com/photos/1.jpg"
             - "https://example.com/photos/2.jpg"
             - "https://example.com/photos/3.jpg"
+        employees:
+          type: array
+          description: Optional initial employees to add simultaneously when creating the workshop
+          items:
+            $ref: '#/components/schemas/CreateEmployeeInput'
 
     UpdateWorkshopRequest:
       type: object
@@ -2534,6 +2846,11 @@ components:
         status:
           type: string
           enum: [ACTIVE, INACTIVE, SUSPENDED]
+        employees:
+          type: array
+          description: List of employees belonging to the workshop
+          items:
+            $ref: '#/components/schemas/WorkshopEmployee'
 
     WorkshopListResponse:
       type: object
@@ -2852,3 +3169,163 @@ components:
         updated_at:
           type: string
           format: date-time
+
+    EmployeeRole:
+      type: string
+      enum:
+        - MECHANIC
+        - ADMIN_CASHIER
+        - ADMIN_INVENTORY
+        - ADMIN_BOTH
+        - MANAGER
+        - OWNER
+      description: Specific employee access role within a workshop
+
+    EmployeeStatus:
+      type: string
+      enum:
+        - ACTIVE
+        - INACTIVE
+
+    EmployeePermissions:
+      type: object
+      properties:
+        can_manage_employees:
+          type: boolean
+        can_manage_inventory:
+          type: boolean
+        can_access_cashier:
+          type: boolean
+        can_access_repair_jobs:
+          type: boolean
+        can_manage_workshop_operations:
+          type: boolean
+
+    WorkshopEmployee:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workshop_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        role:
+          $ref: '#/components/schemas/EmployeeRole'
+        status:
+          $ref: '#/components/schemas/EmployeeStatus'
+        specialization:
+          type: string
+        notes:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        permissions:
+          $ref: '#/components/schemas/EmployeePermissions'
+
+    CreateEmployeeInput:
+      type: object
+      required:
+        - name
+        - phone
+        - role
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        role:
+          $ref: '#/components/schemas/EmployeeRole'
+        status:
+          $ref: '#/components/schemas/EmployeeStatus'
+        specialization:
+          type: string
+        notes:
+          type: string
+
+    CreateEmployeeRequest:
+      type: object
+      required:
+        - name
+        - phone
+        - role
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        role:
+          $ref: '#/components/schemas/EmployeeRole'
+        status:
+          $ref: '#/components/schemas/EmployeeStatus'
+        specialization:
+          type: string
+        notes:
+          type: string
+
+    UpdateEmployeeRequest:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        role:
+          $ref: '#/components/schemas/EmployeeRole'
+        status:
+          $ref: '#/components/schemas/EmployeeStatus'
+        specialization:
+          type: string
+        notes:
+          type: string
+
+    EmployeeDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/WorkshopEmployee'
+
+    EmployeeListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkshopEmployee'
+        meta:
+          $ref: '#/components/schemas/PaginationMeta'
