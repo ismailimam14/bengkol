@@ -88,9 +88,19 @@ paths:
   /api/v1/auth/login:
     post:
       summary: Authenticate user
-      description: Authenticate a user and return a JWT token pair. Either email or phone number must be provided alongside the password.
+      description: |
+        Authenticates a user and returns a JWT token pair with workshop resolution based on the mandatory `appName` application header:
+        - `appName: bengkol`: Customer application login. Always returns role `CUSTOMER`, omits workshop details and permissions, and never reclassifies existing accounts in the database.
+        - `appName: bengkolAdmin`: Workshop administration application login.
+          - 0 workshops: Returns `403 Forbidden` with error code `NO_WORKSHOP_ACCESS`.
+          - 1 workshop: Automatically selects workshop, issues a workshop-scoped token pair with active employee/owner role and 20-key permissions.
+          - >1 workshops: Returns `requires_workshop_selection: true`, user's workshops list, and `selected_workshop_id: null`. The client must then call `POST /api/v1/auth/get-permissions` (or `/select-workshop`) with the chosen workshop ID.
       tags:
         - Authentication
+      parameters:
+        - $ref: '#/components/parameters/AppNameHeader'
+        - $ref: '#/components/parameters/AppDeviceHeader'
+        - $ref: '#/components/parameters/AppVersionHeader'
       requestBody:
         required: true
         content:
@@ -104,6 +114,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Bad request (invalid credentials or invalid application headers)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (no workshop access for bengkolAdmin)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/v1/auth/refresh:
     post:
@@ -223,20 +245,127 @@ paths:
               schema:
                 $ref: '#/components/schemas/ValidationErrorResponse'
 
+  /api/v1/auth/get-permissions:
+    post:
+      summary: Select workshop and get scoped permissions
+      description: |
+        Selects an active workshop membership for the authenticated user and issues a workshop-scoped JWT access token with resolved role and granular 20-key permissions.
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AppNameHeader'
+        - $ref: '#/components/parameters/AppDeviceHeader'
+        - $ref: '#/components/parameters/AppVersionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetPermissionsRequest'
+      responses:
+        '200':
+          description: Workshop selected and scoped token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPermissionsResponse'
+        '400':
+          description: Bad request (invalid workshop ID or missing request body)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (caller has no active membership in requested workshop)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Workshop not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/auth/select-workshop:
+    post:
+      summary: Select workshop (alias for get-permissions)
+      description: Alias endpoint for `/api/v1/auth/get-permissions`.
+      tags:
+        - Authentication
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AppNameHeader'
+        - $ref: '#/components/parameters/AppDeviceHeader'
+        - $ref: '#/components/parameters/AppVersionHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GetPermissionsRequest'
+      responses:
+        '200':
+          description: Workshop selected and scoped token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetPermissionsResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/v1/me:
     get:
-      summary: Get authenticated user profile
+      summary: Get authenticated user details and workshop context
+      description: |
+        Returns user profile along with available workshops, selected workshop ID, active role, and 20-key permissions.
       tags:
         - User
       security:
         - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AppNameHeader'
+        - $ref: '#/components/parameters/AppDeviceHeader'
+        - $ref: '#/components/parameters/AppVersionHeader'
       responses:
         '200':
-          description: User profile
+          description: User details and workshop context
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserProfileResponse'
+                $ref: '#/components/schemas/UserDetailResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/v1/me/password:
     put:
@@ -323,6 +452,11 @@ paths:
                 $ref: '#/components/schemas/WorkshopListResponse'
     post:
       summary: Create a new workshop
+      description: |
+        Registers a new workshop with operating hours and optional initial employees.
+        - Owner phone cannot be already registered as an employee in any workshop.
+        - Initial employees cannot share the owner's phone or workshop's phone, cannot be registered as workshop owners, and cannot have duplicate phones in the request.
+        - Initial employees can be assigned custom permissions validated against the 20 canonical keys; unknown permission keys are rejected; owner employee permissions are strictly immutable.
       tags:
         - Workshops
       security:
@@ -568,7 +702,11 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: Add a new employee to a workshop
-      description: Adds an employee to the workshop. Accessible by workshop owner, manager, or system admin. Managers cannot assign the OWNER role.
+      description: |
+        Adds an employee to the workshop.
+        - Phone separation: employee phone cannot be registered to a workshop owner or match the workshop owner's phone.
+        - Role & permissions: configurable 20-key permission matrix supported for ADMIN roles. Unknown permission keys are rejected with validation errors.
+        - Anti-escalation: Non-owner callers must possess `can_manage_roles_and_permissions` and cannot grant permissions exceeding caller authority. Managers cannot assign the OWNER role.
       tags:
         - Employees
       security:
@@ -700,7 +838,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     patch:
       summary: Update workshop employee
-      description: Updates employee role, contact info, specialization, status, or notes. Managers cannot modify workshop owners.
+      description: |
+        Updates employee role, contact info, specialization, status, notes, or permissions.
+        - Phone separation: phone update validated to ensure phone is not registered to a workshop owner or current owner.
+        - Unknown permission keys are rejected with validation errors.
+        - Anti-escalation: Non-owner callers must possess `can_manage_roles_and_permissions` and cannot grant permissions exceeding caller authority.
+        - Owner permissions are strictly immutable (cannot be downgraded or modified). Managers cannot modify workshop owners.
       tags:
         - Employees
       security:
@@ -2055,6 +2198,38 @@ components:
       scheme: bearer
       bearerFormat: JWT
 
+  parameters:
+    AppNameHeader:
+      name: appName
+      in: header
+      required: true
+      description: Application identifier ('bengkol' for customer app, 'bengkolAdmin' for workshop administration & employee app).
+      schema:
+        type: string
+        enum:
+          - bengkol
+          - bengkolAdmin
+        example: bengkolAdmin
+    AppDeviceHeader:
+      name: appDevice
+      in: header
+      required: true
+      description: Client device type ('mobile app' or 'web').
+      schema:
+        type: string
+        enum:
+          - mobile app
+          - web
+        example: mobile app
+    AppVersionHeader:
+      name: appVersion
+      in: header
+      required: true
+      description: Client application version (e.g. 1.0, 1.2, 2.0).
+      schema:
+        type: string
+        example: "1.0.0"
+
   schemas:
     RegisterDeviceRequest:
       type: object
@@ -3262,6 +3437,87 @@ components:
               $ref: '#/components/schemas/User'
             tokens:
               $ref: '#/components/schemas/TokenPair'
+            workshops:
+              type: array
+              items:
+                $ref: '#/components/schemas/WorkshopSummary'
+            selected_workshop_id:
+              type: string
+              format: uuid
+              nullable: true
+            role:
+              type: string
+              enum: [CUSTOMER, OWNER, ADMIN, MANAGER, MECHANIC]
+            permissions:
+              $ref: '#/components/schemas/EmployeePermissions'
+            requires_workshop_selection:
+              type: boolean
+
+    WorkshopSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        role:
+          type: string
+          example: OWNER
+
+    GetPermissionsRequest:
+      type: object
+      required:
+        - workshop_id
+      properties:
+        workshop_id:
+          type: string
+          format: uuid
+
+    GetPermissionsResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            tokens:
+              $ref: '#/components/schemas/TokenPair'
+            selected_workshop_id:
+              type: string
+              format: uuid
+            workshop_name:
+              type: string
+            role:
+              type: string
+              enum: [CUSTOMER, OWNER, ADMIN, MANAGER, MECHANIC]
+            permissions:
+              $ref: '#/components/schemas/EmployeePermissions'
+
+    UserDetailResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            user:
+              $ref: '#/components/schemas/User'
+            workshops:
+              type: array
+              items:
+                $ref: '#/components/schemas/WorkshopSummary'
+            selected_workshop_id:
+              type: string
+              format: uuid
+              nullable: true
+            role:
+              type: string
+              enum: [CUSTOMER, OWNER, ADMIN, MANAGER, MECHANIC]
+            permissions:
+              $ref: '#/components/schemas/EmployeePermissions'
 
     UserProfileResponse:
       type: object
@@ -3328,7 +3584,7 @@ components:
           type: string
         role:
           type: string
-          enum: [CUSTOMER, OWNER, ADMIN]
+          enum: [CUSTOMER, OWNER, ADMIN, MANAGER, MECHANIC]
         created_at:
           type: string
           format: date-time
@@ -3343,8 +3599,10 @@ components:
         - ADMIN_CASHIER
         - ADMIN_INVENTORY
         - ADMIN_BOTH
+        - ADMIN
         - MANAGER
         - OWNER
+        - CUSTOMER
       description: Specific employee access role within a workshop
 
     EmployeeStatus:
@@ -3355,6 +3613,7 @@ components:
 
     EmployeePermissions:
       type: object
+      description: 20-key granular permission matrix enforced by backend middleware and services.
       properties:
         can_manage_employees:
           type: boolean
@@ -3365,6 +3624,36 @@ components:
         can_access_repair_jobs:
           type: boolean
         can_manage_workshop_operations:
+          type: boolean
+        can_issue_refunds:
+          type: boolean
+        can_manage_discounts:
+          type: boolean
+        can_view_sales_reports:
+          type: boolean
+        can_view_inventory_reports:
+          type: boolean
+        can_view_employee_performance:
+          type: boolean
+        can_manage_customers:
+          type: boolean
+        can_assign_jobs_to_mechanics:
+          type: boolean
+        can_update_job_status:
+          type: boolean
+        can_manage_system_settings:
+          type: boolean
+        can_manage_roles_and_permissions:
+          type: boolean
+        can_access_financial_reports:
+          type: boolean
+        can_manage_pricing:
+          type: boolean
+        can_transfer_ownership:
+          type: boolean
+        can_override_transactions:
+          type: boolean
+        can_revoke_manager_actions:
           type: boolean
 
     WorkshopEmployee:
@@ -3431,6 +3720,8 @@ components:
           type: string
         notes:
           type: string
+        permissions:
+          $ref: '#/components/schemas/EmployeePermissions'
 
     CreateEmployeeRequest:
       type: object
@@ -3456,6 +3747,8 @@ components:
           type: string
         notes:
           type: string
+        permissions:
+          $ref: '#/components/schemas/EmployeePermissions'
 
     UpdateEmployeeRequest:
       type: object
@@ -3477,6 +3770,8 @@ components:
           type: string
         notes:
           type: string
+        permissions:
+          $ref: '#/components/schemas/EmployeePermissions'
 
     EmployeeDetailResponse:
       type: object
