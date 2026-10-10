@@ -82,6 +82,54 @@ type EmployeePermissions struct {
 	CanRevokeManagerActions       bool `json:"can_revoke_manager_actions"`
 }
 
+// HasPermission checks if the permission struct grants the specified permission key
+func (p EmployeePermissions) HasPermission(key string) bool {
+	switch key {
+	case PermCanManageEmployees:
+		return p.CanManageEmployees
+	case PermCanManageInventory:
+		return p.CanManageInventory
+	case PermCanAccessCashier:
+		return p.CanAccessCashier
+	case PermCanAccessRepairJobs:
+		return p.CanAccessRepairJobs
+	case PermCanManageWorkshopOperations:
+		return p.CanManageWorkshopOperations
+	case PermCanIssueRefunds:
+		return p.CanIssueRefunds
+	case PermCanManageDiscounts:
+		return p.CanManageDiscounts
+	case PermCanViewSalesReports:
+		return p.CanViewSalesReports
+	case PermCanViewInventoryReports:
+		return p.CanViewInventoryReports
+	case PermCanViewEmployeePerformance:
+		return p.CanViewEmployeePerformance
+	case PermCanManageCustomers:
+		return p.CanManageCustomers
+	case PermCanAssignJobsToMechanics:
+		return p.CanAssignJobsToMechanics
+	case PermCanUpdateJobStatus:
+		return p.CanUpdateJobStatus
+	case PermCanManageSystemSettings:
+		return p.CanManageSystemSettings
+	case PermCanManageRolesAndPermissions:
+		return p.CanManageRolesAndPermissions
+	case PermCanAccessFinancialReports:
+		return p.CanAccessFinancialReports
+	case PermCanManagePricing:
+		return p.CanManagePricing
+	case PermCanTransferOwnership:
+		return p.CanTransferOwnership
+	case PermCanOverrideTransactions:
+		return p.CanOverrideTransactions
+	case PermCanRevokeManagerActions:
+		return p.CanRevokeManagerActions
+	default:
+		return false
+	}
+}
+
 // DefaultPermissionsForRole returns the default permission matrix for a given role
 func DefaultPermissionsForRole(r EmployeeRole) EmployeePermissions {
 	switch r {
@@ -414,4 +462,27 @@ func NormalizeEmployeeRole(r string) (EmployeeRole, bool) {
 	default:
 		return "", false
 	}
+}
+
+// ToUserRole converts an EmployeeRole to corresponding UserRole.
+func (r EmployeeRole) ToUserRole() UserRole {
+	switch r {
+	case EmployeeRoleOwner:
+		return RoleOwner
+	case EmployeeRoleManager:
+		return RoleManager
+	case EmployeeRoleMechanic:
+		return RoleMechanic
+	case EmployeeRoleCustomer:
+		return RoleCustomer
+	case EmployeeRoleAdmin, EmployeeRoleAdminBoth, EmployeeRoleAdminCashier, EmployeeRoleAdminInventory:
+		return RoleAdmin
+	default:
+		return RoleCustomer
+	}
+}
+
+// EmployeeRoleToUserRole converts an EmployeeRole to UserRole.
+func EmployeeRoleToUserRole(er EmployeeRole) UserRole {
+	return er.ToUserRole()
 }

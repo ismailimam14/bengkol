@@ -8,6 +8,7 @@ import (
 
 	"github.com/bengkol/backend/internal/auth"
 	"github.com/bengkol/backend/internal/domain"
+	"github.com/bengkol/backend/internal/middleware"
 	"github.com/bengkol/backend/pkg/logger"
 	"github.com/bengkol/backend/pkg/security"
 	"github.com/google/uuid"
@@ -15,16 +16,22 @@ import (
 
 // MockRepository implements auth.Repository for testing
 type mockAuthRepo struct {
-	users         map[string]*domain.User        // key: email
-	usersByID     map[uuid.UUID]*domain.User     // key: id
-	refreshTokens map[string]*domain.RefreshToken // key: token_hash
+	users             map[string]*domain.User             // key: email
+	usersByID         map[uuid.UUID]*domain.User          // key: id
+	refreshTokens     map[string]*domain.RefreshToken     // key: token_hash
+	workshopsByUserID map[uuid.UUID][]domain.Workshop     // key: user_id
+	memberships       map[string]*domain.WorkshopEmployee // key: workshop_id:user_id
+	workshopsByID     map[uuid.UUID]*domain.Workshop      // key: workshop_id
 }
 
 func newMockAuthRepo() *mockAuthRepo {
 	return &mockAuthRepo{
-		users:         make(map[string]*domain.User),
-		usersByID:     make(map[uuid.UUID]*domain.User),
-		refreshTokens: make(map[string]*domain.RefreshToken),
+		users:             make(map[string]*domain.User),
+		usersByID:         make(map[uuid.UUID]*domain.User),
+		refreshTokens:     make(map[string]*domain.RefreshToken),
+		workshopsByUserID: make(map[uuid.UUID][]domain.Workshop),
+		memberships:       make(map[string]*domain.WorkshopEmployee),
+		workshopsByID:     make(map[uuid.UUID]*domain.Workshop),
 	}
 }
 
@@ -120,14 +127,24 @@ func (m *mockAuthRepo) IsPhoneRegisteredAsEmployee(ctx context.Context, phone st
 }
 
 func (m *mockAuthRepo) GetWorkshopsByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error) {
+	if ws, ok := m.workshopsByUserID[userID]; ok {
+		return ws, nil
+	}
 	return []domain.Workshop{}, nil
 }
 
 func (m *mockAuthRepo) GetWorkshopEmployeeMembership(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error) {
+	key := workshopID.String() + ":" + userID.String()
+	if emp, ok := m.memberships[key]; ok {
+		return emp, nil
+	}
 	return nil, nil
 }
 
 func (m *mockAuthRepo) GetWorkshopByID(ctx context.Context, workshopID uuid.UUID) (*domain.Workshop, error) {
+	if ws, ok := m.workshopsByID[workshopID]; ok {
+		return ws, nil
+	}
 	return nil, nil
 }
 
@@ -754,6 +771,295 @@ func TestAuthService_ChangePassword(t *testing.T) {
 	stored, _ := repo.GetRefreshToken(ctx, security.HashToken(oldRfToken))
 	if !stored.Revoked {
 		t.Errorf("expected existing refresh token to be revoked upon password change")
+	}
+}
+
+func TestAuthService_Login_BengkolCustomerApp(t *testing.T) {
+	svc, repo, _ := setupAuthService()
+
+	// Register user as OWNER in DB
+	regResp, _, err := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Owner User",
+		Email:    "owner.customerapp@example.com",
+		Password: "password123",
+		Phone:    "0811223344",
+		Role:     domain.RoleOwner,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error registering: %v", err)
+	}
+
+	// Login with bengkol customer app context
+	ctx := context.WithValue(context.Background(), middleware.AppNameKey, middleware.AppNameBengkol)
+	loginResp, err := svc.Login(ctx, auth.LoginRequest{
+		Email:    "owner.customerapp@example.com",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error during login: %v", err)
+	}
+
+	// Should return role CUSTOMER
+	if loginResp.Role != domain.RoleCustomer {
+		t.Errorf("expected role CUSTOMER in response, got %s", loginResp.Role)
+	}
+	if loginResp.User.Role != domain.RoleCustomer {
+		t.Errorf("expected User.Role to be CUSTOMER in response, got %s", loginResp.User.Role)
+	}
+	if loginResp.Workshops != nil {
+		t.Errorf("expected workshops to be omitted for customer app, got %+v", loginResp.Workshops)
+	}
+	if loginResp.Permissions != nil {
+		t.Errorf("expected permissions to be omitted for customer app")
+	}
+	if loginResp.RequiresWorkshopSelection {
+		t.Errorf("expected requires_workshop_selection to be false for customer app")
+	}
+
+	// Verify DB record was NOT modified
+	dbUser, err := repo.GetUserByID(context.Background(), regResp.User.ID)
+	if err != nil {
+		t.Fatalf("unexpected error querying user: %v", err)
+	}
+	if dbUser.Role != domain.RoleOwner {
+		t.Errorf("expected DB user role to remain OWNER, got %s", dbUser.Role)
+	}
+}
+
+func TestAuthService_Login_BengkolAdmin_NoWorkshops(t *testing.T) {
+	svc, _, _ := setupAuthService()
+
+	// Register customer
+	_, _, err := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Plain Customer",
+		Email:    "plain.cust@example.com",
+		Password: "password123",
+		Phone:    "0822334455",
+		Role:     domain.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error registering: %v", err)
+	}
+
+	// Login with bengkolAdmin
+	ctx := context.WithValue(context.Background(), middleware.AppNameKey, middleware.AppNameBengkolAdmin)
+	_, err = svc.Login(ctx, auth.LoginRequest{
+		Email:    "plain.cust@example.com",
+		Password: "password123",
+	})
+	if !errors.Is(err, auth.ErrNoWorkshopAccess) {
+		t.Errorf("expected ErrNoWorkshopAccess for user with 0 workshops, got %v", err)
+	}
+}
+
+func TestAuthService_Login_BengkolAdmin_SingleWorkshop_AutoSelect(t *testing.T) {
+	svc, repo, jwtMgr := setupAuthService()
+
+	regResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Single Owner",
+		Email:    "single.owner@example.com",
+		Password: "password123",
+		Phone:    "0833445566",
+		Role:     domain.RoleOwner,
+	})
+
+	wsID := uuid.New()
+	ws := domain.Workshop{
+		ID:      wsID,
+		OwnerID: regResp.User.ID,
+		Name:    "Bengkol Jaya 1",
+		Status:  domain.WorkshopStatusActive,
+	}
+	repo.workshopsByUserID[regResp.User.ID] = []domain.Workshop{ws}
+	repo.workshopsByID[wsID] = &ws
+
+	ctx := context.WithValue(context.Background(), middleware.AppNameKey, middleware.AppNameBengkolAdmin)
+	loginResp, err := svc.Login(ctx, auth.LoginRequest{
+		Email:    "single.owner@example.com",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error logging in: %v", err)
+	}
+
+	if loginResp.RequiresWorkshopSelection {
+		t.Errorf("expected single workshop to auto-select without requiring selection")
+	}
+	if loginResp.SelectedWorkshopID == nil || *loginResp.SelectedWorkshopID != wsID {
+		t.Errorf("expected selected_workshop_id %s, got %v", wsID, loginResp.SelectedWorkshopID)
+	}
+	if loginResp.Role != domain.RoleOwner {
+		t.Errorf("expected role OWNER, got %s", loginResp.Role)
+	}
+	if loginResp.Permissions == nil || !loginResp.Permissions.CanManageRolesAndPermissions {
+		t.Errorf("expected owner full permissions")
+	}
+
+	// Validate token claims are scoped to the workshop
+	claims, err := jwtMgr.ValidateAccessToken(loginResp.Tokens.AccessToken)
+	if err != nil {
+		t.Fatalf("failed to validate issued access token: %v", err)
+	}
+	if claims.WorkshopID == nil || *claims.WorkshopID != wsID {
+		t.Errorf("expected access token to contain workshop_id %s, got %v", wsID, claims.WorkshopID)
+	}
+}
+
+func TestAuthService_Login_BengkolAdmin_MultipleWorkshops_RequiresSelection(t *testing.T) {
+	svc, repo, _ := setupAuthService()
+
+	regResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Multi Owner",
+		Email:    "multi.owner@example.com",
+		Password: "password123",
+		Phone:    "0844556677",
+		Role:     domain.RoleOwner,
+	})
+
+	ws1 := domain.Workshop{ID: uuid.New(), OwnerID: regResp.User.ID, Name: "Workshop A", Status: domain.WorkshopStatusActive}
+	ws2 := domain.Workshop{ID: uuid.New(), OwnerID: regResp.User.ID, Name: "Workshop B", Status: domain.WorkshopStatusActive}
+	repo.workshopsByUserID[regResp.User.ID] = []domain.Workshop{ws1, ws2}
+	repo.workshopsByID[ws1.ID] = &ws1
+	repo.workshopsByID[ws2.ID] = &ws2
+
+	ctx := context.WithValue(context.Background(), middleware.AppNameKey, middleware.AppNameBengkolAdmin)
+	loginResp, err := svc.Login(ctx, auth.LoginRequest{
+		Email:    "multi.owner@example.com",
+		Password: "password123",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error logging in: %v", err)
+	}
+
+	if !loginResp.RequiresWorkshopSelection {
+		t.Errorf("expected multiple workshops to require selection")
+	}
+	if loginResp.SelectedWorkshopID != nil {
+		t.Errorf("expected selected_workshop_id to be nil when selection is required")
+	}
+	if len(loginResp.Workshops) != 2 {
+		t.Errorf("expected 2 workshops, got %d", len(loginResp.Workshops))
+	}
+}
+
+func TestAuthService_GetPermissions_SuccessAndForbidden(t *testing.T) {
+	svc, repo, jwtMgr := setupAuthService()
+
+	userResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Staff Member",
+		Email:    "staff.select@example.com",
+		Password: "password123",
+		Phone:    "0855667788",
+		Role:     domain.RoleCustomer,
+	})
+
+	ws1 := domain.Workshop{ID: uuid.New(), OwnerID: uuid.New(), Name: "Mechanic Shop", Status: domain.WorkshopStatusActive}
+	ws2 := domain.Workshop{ID: uuid.New(), OwnerID: uuid.New(), Name: "Other Shop", Status: domain.WorkshopStatusActive}
+	repo.workshopsByID[ws1.ID] = &ws1
+	repo.workshopsByID[ws2.ID] = &ws2
+
+	// User is mechanic in ws1
+	empRecord := &domain.WorkshopEmployee{
+		ID:         uuid.New(),
+		WorkshopID: ws1.ID,
+		UserID:     &userResp.User.ID,
+		Name:       "Staff Member",
+		Phone:      "0855667788",
+		Role:       domain.EmployeeRoleMechanic,
+		Status:     domain.EmployeeStatusActive,
+	}
+	repo.memberships[ws1.ID.String()+":"+userResp.User.ID.String()] = empRecord
+
+	// 1. Successful get-permissions for ws1
+	resp, err := svc.GetPermissions(context.Background(), userResp.User.ID, auth.GetPermissionsRequest{
+		WorkshopID: ws1.ID,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error getting permissions: %v", err)
+	}
+
+	if resp.WorkshopID != ws1.ID {
+		t.Errorf("expected workshop ID %s, got %s", ws1.ID, resp.WorkshopID)
+	}
+	if resp.Role != domain.RoleMechanic {
+		t.Errorf("expected role MECHANIC, got %s", resp.Role)
+	}
+	if resp.Permissions == nil || !resp.Permissions.CanAccessRepairJobs {
+		t.Errorf("expected CanAccessRepairJobs to be true for mechanic")
+	}
+	if resp.Permissions.CanManageEmployees {
+		t.Errorf("expected CanManageEmployees to be false for mechanic")
+	}
+
+	// Validate scoped token claims
+	claims, err := jwtMgr.ValidateAccessToken(resp.Tokens.AccessToken)
+	if err != nil {
+		t.Fatalf("failed to validate token: %v", err)
+	}
+	if claims.WorkshopID == nil || *claims.WorkshopID != ws1.ID {
+		t.Errorf("expected token claims to contain workshop ID %s", ws1.ID)
+	}
+
+	// 2. Unauthorized get-permissions for ws2 (not a member)
+	_, err = svc.GetPermissions(context.Background(), userResp.User.ID, auth.GetPermissionsRequest{
+		WorkshopID: ws2.ID,
+	})
+	if !errors.Is(err, auth.ErrForbidden) {
+		t.Errorf("expected ErrForbidden for non-member workshop, got %v", err)
+	}
+
+	// 3. Inactive employee rejection
+	empRecord.Status = domain.EmployeeStatusInactive
+	_, err = svc.GetPermissions(context.Background(), userResp.User.ID, auth.GetPermissionsRequest{
+		WorkshopID: ws1.ID,
+	})
+	if !errors.Is(err, auth.ErrEmployeeInactive) {
+		t.Errorf("expected ErrEmployeeInactive for inactive employee, got %v", err)
+	}
+}
+
+func TestAuthService_GetMe_BengkolVsBengkolAdmin(t *testing.T) {
+	svc, repo, _ := setupAuthService()
+
+	regResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Profile User",
+		Email:    "profile.user@example.com",
+		Password: "password123",
+		Phone:    "0866778899",
+		Role:     domain.RoleOwner,
+	})
+
+	ws := domain.Workshop{ID: uuid.New(), OwnerID: regResp.User.ID, Name: "Profile Shop", Status: domain.WorkshopStatusActive}
+	repo.workshopsByUserID[regResp.User.ID] = []domain.Workshop{ws}
+	repo.workshopsByID[ws.ID] = &ws
+
+	// 1. Customer app context -> role CUSTOMER, no workshops
+	ctxBengkol := context.WithValue(context.Background(), middleware.AppNameKey, middleware.AppNameBengkol)
+	meBengkol, err := svc.GetMe(ctxBengkol, regResp.User.ID)
+	if err != nil {
+		t.Fatalf("unexpected error from GetMe: %v", err)
+	}
+	if meBengkol.Role != domain.RoleCustomer {
+		t.Errorf("expected role CUSTOMER for bengkol app, got %s", meBengkol.Role)
+	}
+	if len(meBengkol.Workshops) != 0 {
+		t.Errorf("expected empty workshops for bengkol app, got %d", len(meBengkol.Workshops))
+	}
+
+	// 2. bengkolAdmin app context -> returns workshops, auto-selects single workshop
+	ctxAdmin := context.WithValue(context.Background(), middleware.AppNameKey, middleware.AppNameBengkolAdmin)
+	meAdmin, err := svc.GetMe(ctxAdmin, regResp.User.ID)
+	if err != nil {
+		t.Fatalf("unexpected error from GetMe: %v", err)
+	}
+	if len(meAdmin.Workshops) != 1 {
+		t.Errorf("expected 1 workshop for bengkolAdmin, got %d", len(meAdmin.Workshops))
+	}
+	if meAdmin.SelectedWorkshopID == nil || *meAdmin.SelectedWorkshopID != ws.ID {
+		t.Errorf("expected selected workshop %s, got %v", ws.ID, meAdmin.SelectedWorkshopID)
+	}
+	if meAdmin.Permissions == nil || !meAdmin.Permissions.CanManageRolesAndPermissions {
+		t.Errorf("expected owner permissions in profile")
 	}
 }
 

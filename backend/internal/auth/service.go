@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bengkol/backend/internal/domain"
+	"github.com/bengkol/backend/internal/middleware"
 	"github.com/bengkol/backend/pkg/logger"
 	"github.com/bengkol/backend/pkg/security"
 	"github.com/bengkol/backend/pkg/validator"
@@ -19,6 +20,10 @@ var (
 	ErrValidationFailed   = errors.New("validation failed")
 	ErrTokenExpired       = errors.New("refresh token has expired")
 	ErrTokenRevoked       = errors.New("refresh token has been revoked")
+	ErrNoWorkshopAccess   = errors.New("no workshop access")
+	ErrForbidden          = errors.New("forbidden")
+	ErrEmployeeInactive   = errors.New("employee membership is inactive")
+	ErrWorkshopNotFound   = errors.New("workshop not found")
 )
 
 // RegisterRequest DTO
@@ -44,10 +49,53 @@ type RefreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-// AuthResponse returns authenticated user and active token pair
+// WorkshopSummary represents workshop membership summary
+type WorkshopSummary struct {
+	ID      uuid.UUID       `json:"id"`
+	Name    string          `json:"name"`
+	Address string          `json:"address,omitempty"`
+	Phone   string          `json:"phone,omitempty"`
+	Role    domain.UserRole `json:"role,omitempty"`
+	Status  string          `json:"status,omitempty"`
+}
+
+// AuthResponse returns authenticated user, active token pair, and workshop context
 type AuthResponse struct {
-	User   *domain.User        `json:"user"`
-	Tokens *security.TokenPair `json:"tokens"`
+	User                      *domain.User                `json:"user"`
+	Tokens                    *security.TokenPair         `json:"tokens"`
+	Workshops                 []WorkshopSummary           `json:"workshops,omitempty"`
+	SelectedWorkshopID        *uuid.UUID                  `json:"selected_workshop_id,omitempty"`
+	Role                      domain.UserRole             `json:"role,omitempty"`
+	Permissions               *domain.EmployeePermissions `json:"permissions,omitempty"`
+	RequiresWorkshopSelection bool                        `json:"requires_workshop_selection,omitempty"`
+}
+
+// GetPermissionsRequest DTO
+type GetPermissionsRequest struct {
+	WorkshopID uuid.UUID `json:"workshop_id"`
+}
+
+// GetPermissionsResponse DTO
+type GetPermissionsResponse struct {
+	WorkshopID  uuid.UUID                   `json:"workshop_id"`
+	Role        domain.UserRole             `json:"role"`
+	Permissions *domain.EmployeePermissions `json:"permissions"`
+	Tokens      *security.TokenPair         `json:"tokens"`
+	Workshop    *domain.Workshop            `json:"workshop,omitempty"`
+}
+
+// UserDetailResponse DTO for /me (userDetail)
+type UserDetailResponse struct {
+	ID                 uuid.UUID                   `json:"id"`
+	Email              string                      `json:"email"`
+	Name               string                      `json:"name"`
+	Phone              string                      `json:"phone"`
+	Role               domain.UserRole             `json:"role"`
+	Workshops          []WorkshopSummary           `json:"workshops,omitempty"`
+	SelectedWorkshopID *uuid.UUID                  `json:"selected_workshop_id,omitempty"`
+	Permissions        *domain.EmployeePermissions `json:"permissions,omitempty"`
+	CreatedAt          time.Time                   `json:"created_at"`
+	UpdatedAt          time.Time                   `json:"updated_at"`
 }
 
 // ChangePasswordRequest DTO
@@ -63,7 +111,8 @@ type Service interface {
 	Login(ctx context.Context, req LoginRequest) (*AuthResponse, error)
 	RefreshToken(ctx context.Context, req RefreshTokenRequest) (*AuthResponse, error)
 	Logout(ctx context.Context, refreshToken string) error
-	GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error)
+	GetMe(ctx context.Context, userID uuid.UUID) (*UserDetailResponse, error)
+	GetPermissions(ctx context.Context, userID uuid.UUID, req GetPermissionsRequest) (*GetPermissionsResponse, error)
 	ChangePassword(ctx context.Context, userID uuid.UUID, req ChangePasswordRequest) (map[string]string, error)
 }
 
@@ -187,6 +236,28 @@ func (s *authService) Register(ctx context.Context, req RegisterRequest) (*AuthR
 	}, nil, nil
 }
 
+func (s *authService) resolveMembership(ctx context.Context, ws domain.Workshop, userID uuid.UUID) (domain.UserRole, *domain.EmployeePermissions, error) {
+	if ws.OwnerID == userID {
+		perms := domain.DefaultPermissionsForRole(domain.EmployeeRoleOwner)
+		return domain.RoleOwner, &perms, nil
+	}
+
+	emp, err := s.repo.GetWorkshopEmployeeMembership(ctx, ws.ID, userID)
+	if err != nil {
+		return "", nil, err
+	}
+	if emp == nil {
+		return "", nil, ErrForbidden
+	}
+	if emp.Status != domain.EmployeeStatusActive {
+		return "", nil, ErrEmployeeInactive
+	}
+
+	role := emp.Role.ToUserRole()
+	perms := emp.CalculatePermissions()
+	return role, &perms, nil
+}
+
 func (s *authService) Login(ctx context.Context, req LoginRequest) (*AuthResponse, error) {
 	if req.Phone == "" && req.PhoneNumber != "" {
 		req.Phone = req.PhoneNumber
@@ -223,13 +294,152 @@ func (s *authService) Login(ctx context.Context, req LoginRequest) (*AuthRespons
 		return nil, ErrInvalidCredentials
 	}
 
-	// Generate tokens
+	now := time.Now().UTC()
+	appName, _ := middleware.GetAppName(ctx)
+
+	// App Name: bengkol (Customer App)
+	if appName == middleware.AppNameBengkol {
+		userCopy := *user
+		userCopy.Role = domain.RoleCustomer
+
+		tokens, tokenHash, err := s.jwt.GenerateTokenPair(&userCopy)
+		if err != nil {
+			return nil, err
+		}
+
+		rfToken := &domain.RefreshToken{
+			ID:        uuid.New(),
+			UserID:    user.ID,
+			TokenHash: tokenHash,
+			Revoked:   false,
+			ExpiresAt: tokens.RefreshExpiresAt,
+			CreatedAt: now,
+		}
+		if err := s.repo.SaveRefreshToken(ctx, rfToken); err != nil {
+			return nil, err
+		}
+
+		s.logger.Info("user logged in via customer app", "user_id", user.ID, "role", userCopy.Role)
+		return &AuthResponse{
+			User:                      &userCopy,
+			Tokens:                    tokens,
+			Role:                      domain.RoleCustomer,
+			Workshops:                 nil,
+			SelectedWorkshopID:        nil,
+			Permissions:               nil,
+			RequiresWorkshopSelection: false,
+		}, nil
+	}
+
+	// App Name: bengkolAdmin (Admin / Workshop App)
+	if appName == middleware.AppNameBengkolAdmin {
+		workshops, err := s.repo.GetWorkshopsByUserID(ctx, user.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(workshops) == 0 {
+			s.logger.Warn("user login rejected: no workshop access", "user_id", user.ID)
+			return nil, ErrNoWorkshopAccess
+		}
+
+		summaries := make([]WorkshopSummary, 0, len(workshops))
+		for _, ws := range workshops {
+			wsRole := domain.RoleCustomer
+			if ws.OwnerID == user.ID {
+				wsRole = domain.RoleOwner
+			} else {
+				emp, _ := s.repo.GetWorkshopEmployeeMembership(ctx, ws.ID, user.ID)
+				if emp != nil {
+					wsRole = emp.Role.ToUserRole()
+				}
+			}
+			summaries = append(summaries, WorkshopSummary{
+				ID:      ws.ID,
+				Name:    ws.Name,
+				Address: ws.Address,
+				Phone:   ws.Phone,
+				Role:    wsRole,
+				Status:  string(ws.Status),
+			})
+		}
+
+		// Single workshop: auto-select and issue workshop-scoped token pair
+		if len(workshops) == 1 {
+			ws := workshops[0]
+			role, perms, err := s.resolveMembership(ctx, ws, user.ID)
+			if err != nil {
+				return nil, err
+			}
+
+			userCopy := *user
+			userCopy.Role = role
+
+			tokens, tokenHash, err := s.jwt.GenerateScopedTokenPair(&userCopy, &ws.ID, role, perms)
+			if err != nil {
+				return nil, err
+			}
+
+			rfToken := &domain.RefreshToken{
+				ID:        uuid.New(),
+				UserID:    user.ID,
+				TokenHash: tokenHash,
+				Revoked:   false,
+				ExpiresAt: tokens.RefreshExpiresAt,
+				CreatedAt: now,
+			}
+			if err := s.repo.SaveRefreshToken(ctx, rfToken); err != nil {
+				return nil, err
+			}
+
+			s.logger.Info("user logged in via admin app (single workshop auto-selected)", "user_id", user.ID, "workshop_id", ws.ID, "role", role)
+			return &AuthResponse{
+				User:                      &userCopy,
+				Tokens:                    tokens,
+				Workshops:                 summaries,
+				SelectedWorkshopID:        &ws.ID,
+				Role:                      role,
+				Permissions:               perms,
+				RequiresWorkshopSelection: false,
+			}, nil
+		}
+
+		// Multiple workshops: requires selection
+		tokens, tokenHash, err := s.jwt.GenerateTokenPair(user)
+		if err != nil {
+			return nil, err
+		}
+
+		rfToken := &domain.RefreshToken{
+			ID:        uuid.New(),
+			UserID:    user.ID,
+			TokenHash: tokenHash,
+			Revoked:   false,
+			ExpiresAt: tokens.RefreshExpiresAt,
+			CreatedAt: now,
+		}
+		if err := s.repo.SaveRefreshToken(ctx, rfToken); err != nil {
+			return nil, err
+		}
+
+		s.logger.Info("user logged in via admin app (multiple workshops, requires selection)", "user_id", user.ID, "workshops_count", len(workshops))
+		return &AuthResponse{
+			User:                      user,
+			Tokens:                    tokens,
+			Workshops:                 summaries,
+			SelectedWorkshopID:        nil,
+			Role:                      "",
+			Permissions:               nil,
+			RequiresWorkshopSelection: true,
+		}, nil
+	}
+
+	// Fallback / legacy login (when appName is unspecified or in test environments)
 	tokens, tokenHash, err := s.jwt.GenerateTokenPair(user)
 	if err != nil {
 		return nil, err
 	}
 
-	now := time.Now().UTC()
 	rfToken := &domain.RefreshToken{
 		ID:        uuid.New(),
 		UserID:    user.ID,
@@ -245,8 +455,10 @@ func (s *authService) Login(ctx context.Context, req LoginRequest) (*AuthRespons
 	s.logger.Info("user logged in", "user_id", user.ID, "role", user.Role)
 
 	return &AuthResponse{
-		User:   user,
-		Tokens: tokens,
+		User:                      user,
+		Tokens:                    tokens,
+		Role:                      user.Role,
+		RequiresWorkshopSelection: false,
 	}, nil
 }
 
@@ -282,13 +494,90 @@ func (s *authService) RefreshToken(ctx context.Context, req RefreshTokenRequest)
 		return nil, ErrUserNotFound
 	}
 
-	// Issue new token pair
+	now := time.Now().UTC()
+	appName, _ := middleware.GetAppName(ctx)
+
+	if appName == middleware.AppNameBengkol {
+		userCopy := *user
+		userCopy.Role = domain.RoleCustomer
+
+		tokens, newTokenHash, err := s.jwt.GenerateTokenPair(&userCopy)
+		if err != nil {
+			return nil, err
+		}
+
+		newRfToken := &domain.RefreshToken{
+			ID:        uuid.New(),
+			UserID:    user.ID,
+			TokenHash: newTokenHash,
+			Revoked:   false,
+			ExpiresAt: tokens.RefreshExpiresAt,
+			CreatedAt: now,
+		}
+		if err := s.repo.SaveRefreshToken(ctx, newRfToken); err != nil {
+			return nil, err
+		}
+
+		return &AuthResponse{
+			User:   &userCopy,
+			Tokens: tokens,
+			Role:   domain.RoleCustomer,
+		}, nil
+	}
+
+	if appName == middleware.AppNameBengkolAdmin {
+		workshops, err := s.repo.GetWorkshopsByUserID(ctx, user.ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(workshops) == 0 {
+			return nil, ErrNoWorkshopAccess
+		}
+
+		if len(workshops) == 1 {
+			ws := workshops[0]
+			role, perms, err := s.resolveMembership(ctx, ws, user.ID)
+			if err != nil {
+				return nil, err
+			}
+
+			userCopy := *user
+			userCopy.Role = role
+
+			tokens, newTokenHash, err := s.jwt.GenerateScopedTokenPair(&userCopy, &ws.ID, role, perms)
+			if err != nil {
+				return nil, err
+			}
+
+			newRfToken := &domain.RefreshToken{
+				ID:        uuid.New(),
+				UserID:    user.ID,
+				TokenHash: newTokenHash,
+				Revoked:   false,
+				ExpiresAt: tokens.RefreshExpiresAt,
+				CreatedAt: now,
+			}
+			if err := s.repo.SaveRefreshToken(ctx, newRfToken); err != nil {
+				return nil, err
+			}
+
+			return &AuthResponse{
+				User:                      &userCopy,
+				Tokens:                    tokens,
+				SelectedWorkshopID:        &ws.ID,
+				Role:                      role,
+				Permissions:               perms,
+				RequiresWorkshopSelection: false,
+			}, nil
+		}
+	}
+
+	// Issue standard token pair
 	tokens, newTokenHash, err := s.jwt.GenerateTokenPair(user)
 	if err != nil {
 		return nil, err
 	}
 
-	now := time.Now().UTC()
 	newRfToken := &domain.RefreshToken{
 		ID:        uuid.New(),
 		UserID:    user.ID,
@@ -304,6 +593,7 @@ func (s *authService) RefreshToken(ctx context.Context, req RefreshTokenRequest)
 	return &AuthResponse{
 		User:   user,
 		Tokens: tokens,
+		Role:   user.Role,
 	}, nil
 }
 
@@ -315,8 +605,158 @@ func (s *authService) Logout(ctx context.Context, refreshToken string) error {
 	return s.repo.RevokeRefreshToken(ctx, tokenHash)
 }
 
-func (s *authService) GetMe(ctx context.Context, userID uuid.UUID) (*domain.User, error) {
-	return s.repo.GetUserByID(ctx, userID)
+func (s *authService) GetPermissions(ctx context.Context, userID uuid.UUID, req GetPermissionsRequest) (*GetPermissionsResponse, error) {
+	if req.WorkshopID == uuid.Nil {
+		return nil, ErrValidationFailed
+	}
+
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, ErrUserNotFound
+	}
+
+	ws, err := s.repo.GetWorkshopByID(ctx, req.WorkshopID)
+	if err != nil {
+		return nil, err
+	}
+	if ws == nil {
+		return nil, ErrWorkshopNotFound
+	}
+
+	role, perms, err := s.resolveMembership(ctx, *ws, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	userCopy := *user
+	userCopy.Role = role
+
+	tokens, tokenHash, err := s.jwt.GenerateScopedTokenPair(&userCopy, &ws.ID, role, perms)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	rfToken := &domain.RefreshToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		Revoked:   false,
+		ExpiresAt: tokens.RefreshExpiresAt,
+		CreatedAt: now,
+	}
+	if err := s.repo.SaveRefreshToken(ctx, rfToken); err != nil {
+		return nil, err
+	}
+
+	s.logger.Info("issued workshop-scoped permissions and token", "user_id", userID, "workshop_id", req.WorkshopID, "role", role)
+
+	return &GetPermissionsResponse{
+		WorkshopID:  req.WorkshopID,
+		Role:        role,
+		Permissions: perms,
+		Tokens:      tokens,
+		Workshop:    ws,
+	}, nil
+}
+
+func (s *authService) GetMe(ctx context.Context, userID uuid.UUID) (*UserDetailResponse, error) {
+	user, err := s.repo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	appName, _ := middleware.GetAppName(ctx)
+	if appName == middleware.AppNameBengkol {
+		return &UserDetailResponse{
+			ID:                 user.ID,
+			Email:              user.Email,
+			Name:               user.Name,
+			Phone:              user.Phone,
+			Role:               domain.RoleCustomer,
+			Workshops:          nil,
+			SelectedWorkshopID: nil,
+			Permissions:        nil,
+			CreatedAt:          user.CreatedAt,
+			UpdatedAt:          user.UpdatedAt,
+		}, nil
+	}
+
+	workshops, err := s.repo.GetWorkshopsByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	var summaries []WorkshopSummary
+	if len(workshops) > 0 {
+		summaries = make([]WorkshopSummary, 0, len(workshops))
+		for _, ws := range workshops {
+			wsRole := domain.RoleCustomer
+			if ws.OwnerID == userID {
+				wsRole = domain.RoleOwner
+			} else {
+				emp, _ := s.repo.GetWorkshopEmployeeMembership(ctx, ws.ID, userID)
+				if emp != nil {
+					wsRole = emp.Role.ToUserRole()
+				}
+			}
+			summaries = append(summaries, WorkshopSummary{
+				ID:      ws.ID,
+				Name:    ws.Name,
+				Address: ws.Address,
+				Phone:   ws.Phone,
+				Role:    wsRole,
+				Status:  string(ws.Status),
+			})
+		}
+	}
+
+	selectedWSID, hasWS := middleware.GetWorkshopID(ctx)
+	var selectedWorkshopID *uuid.UUID
+	var perms *domain.EmployeePermissions
+	userRole := user.Role
+
+	if hasWS && selectedWSID != uuid.Nil {
+		selectedWorkshopID = &selectedWSID
+		ctxPerms, hasPerms := middleware.GetPermissions(ctx)
+		if hasPerms && ctxPerms != nil {
+			perms = ctxPerms
+		}
+		if ctxRole, hasRole := middleware.GetUserRole(ctx); hasRole {
+			userRole = ctxRole
+		}
+		if perms == nil {
+			ws, _ := s.repo.GetWorkshopByID(ctx, selectedWSID)
+			if ws != nil {
+				resolvedRole, resolvedPerms, err := s.resolveMembership(ctx, *ws, userID)
+				if err == nil {
+					userRole = resolvedRole
+					perms = resolvedPerms
+				}
+			}
+		}
+	} else if len(workshops) == 1 && appName == middleware.AppNameBengkolAdmin {
+		ws := workshops[0]
+		resolvedRole, resolvedPerms, err := s.resolveMembership(ctx, ws, userID)
+		if err == nil {
+			selectedWorkshopID = &ws.ID
+			userRole = resolvedRole
+			perms = resolvedPerms
+		}
+	}
+
+	return &UserDetailResponse{
+		ID:                 user.ID,
+		Email:              user.Email,
+		Name:               user.Name,
+		Phone:              user.Phone,
+		Role:               userRole,
+		Workshops:          summaries,
+		SelectedWorkshopID: selectedWorkshopID,
+		Permissions:        perms,
+		CreatedAt:          user.CreatedAt,
+		UpdatedAt:          user.UpdatedAt,
+	}, nil
 }
 
 func (s *authService) ChangePassword(ctx context.Context, userID uuid.UUID, req ChangePasswordRequest) (map[string]string, error) {

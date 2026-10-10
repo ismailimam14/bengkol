@@ -85,4 +85,5 @@ const (
 	ErrCodeConflict            = "CONFLICT"
 	ErrCodeValidationFailed    = "VALIDATION_FAILED"
 	ErrCodeDatabaseUnavailable = "DATABASE_UNAVAILABLE"
+	ErrCodeNoWorkshopAccess    = "NO_WORKSHOP_ACCESS"
 )
