@@ -3,8 +3,10 @@ package workshop
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bengkol/backend/internal/domain"
@@ -48,6 +50,9 @@ type Repository interface {
 	DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error
 	CreateEmployees(ctx context.Context, workshopID uuid.UUID, employees []domain.WorkshopEmployee) error
 	GetEmployees(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopEmployee, error)
+	IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error)
+	IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error)
+	GetOwnerPhone(ctx context.Context, ownerID uuid.UUID) (string, error)
 }
 
 type postgresRepository struct {
@@ -542,9 +547,9 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 	}
 	query := `
 		INSERT INTO workshop_employees (
-			id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+			id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 		)
 	`
 	for _, emp := range employees {
@@ -596,6 +601,11 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 			}
 		}
 
+		var permsJSON []byte
+		if emp.Permissions != nil {
+			permsJSON, _ = json.Marshal(emp.Permissions)
+		}
+
 		_, err := r.db.ExecContext(
 			ctx,
 			query,
@@ -609,6 +619,7 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 			string(status),
 			emp.Specialization,
 			emp.Notes,
+			permsJSON,
 			createdAt,
 			updatedAt,
 		)
@@ -621,7 +632,7 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 
 func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopEmployee, error) {
 	query := `
-		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		FROM workshop_employees
 		WHERE workshop_id = $1
 		ORDER BY created_at ASC
@@ -636,6 +647,7 @@ func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.U
 	for rows.Next() {
 		var emp domain.WorkshopEmployee
 		var email, specialization, notes sql.NullString
+		var permsJSON []byte
 		if err := rows.Scan(
 			&emp.ID,
 			&emp.WorkshopID,
@@ -647,6 +659,7 @@ func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.U
 			&emp.Status,
 			&specialization,
 			&notes,
+			&permsJSON,
 			&emp.CreatedAt,
 			&emp.UpdatedAt,
 		); err != nil {
@@ -661,10 +674,69 @@ func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.U
 		if notes.Valid {
 			emp.Notes = notes.String
 		}
+		if len(permsJSON) > 0 {
+			var customPerms domain.EmployeePermissions
+			if err := json.Unmarshal(permsJSON, &customPerms); err == nil {
+				emp.Permissions = &customPerms
+			}
+		}
 		perms := emp.CalculatePermissions()
 		emp.Permissions = &perms
 		employees = append(employees, emp)
 	}
 	return employees, rows.Err()
+}
+
+func (r *postgresRepository) IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return false, nil
+	}
+	norm := domain.NormalizePhone(trimmed)
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE (phone = $1 OR phone = $2) AND role = 'OWNER'
+		)
+	`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if phone is registered as owner: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *postgresRepository) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return false, nil
+	}
+	norm := domain.NormalizePhone(trimmed)
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM workshop_employees
+			WHERE phone = $1 OR phone = $2
+		)
+	`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if phone is registered as employee: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *postgresRepository) GetOwnerPhone(ctx context.Context, ownerID uuid.UUID) (string, error) {
+	query := `SELECT phone FROM users WHERE id = $1 LIMIT 1`
+	var phone string
+	err := r.db.QueryRowContext(ctx, query, ownerID).Scan(&phone)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get owner phone: %w", err)
+	}
+	return phone, nil
 }
 

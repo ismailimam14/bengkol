@@ -156,6 +156,7 @@ func main() {
 		DeviceHandler:    deviceHandler,
 		WSHandler:        wsHandler,
 		JWTManager:       jwtMgr,
+		StrictAppHeaders: true,
 	})
 
 	// 9. Setup HTTP Server

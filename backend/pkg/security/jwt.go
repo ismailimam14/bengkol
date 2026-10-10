@@ -20,10 +20,12 @@ var (
 
 // CustomClaims represents the JWT payload claims for Bengkol.
 type CustomClaims struct {
-	UserID uuid.UUID       `json:"user_id"`
-	Email  string          `json:"email"`
-	Name   string          `json:"name"`
-	Role   domain.UserRole `json:"role"`
+	UserID      uuid.UUID                   `json:"user_id"`
+	Email       string                      `json:"email"`
+	Name        string                      `json:"name"`
+	Role        domain.UserRole             `json:"role"`
+	WorkshopID  *uuid.UUID                  `json:"workshop_id,omitempty"`
+	Permissions *domain.EmployeePermissions `json:"permissions,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -59,15 +61,22 @@ func NewJWTManager(accessSecret, refreshSecret string, accessExpiryMinutes, refr
 
 // GenerateTokenPair generates an access token and a cryptographically secure random refresh token.
 func (m *JWTManager) GenerateTokenPair(user *domain.User) (*TokenPair, string, error) {
+	return m.GenerateScopedTokenPair(user, nil, user.Role, nil)
+}
+
+// GenerateScopedTokenPair generates an access token and refresh token scoped to a workshop with role and permissions.
+func (m *JWTManager) GenerateScopedTokenPair(user *domain.User, workshopID *uuid.UUID, role domain.UserRole, perms *domain.EmployeePermissions) (*TokenPair, string, error) {
 	now := time.Now().UTC()
 	accessExpiresAt := now.Add(m.accessExpiryMin)
 	refreshExpiresAt := now.Add(m.refreshExpiryDays)
 
 	claims := CustomClaims{
-		UserID: user.ID,
-		Email:  user.Email,
-		Name:   user.Name,
-		Role:   user.Role,
+		UserID:      user.ID,
+		Email:       user.Email,
+		Name:        user.Name,
+		Role:        role,
+		WorkshopID:  workshopID,
+		Permissions: perms,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   user.ID.String(),
 			Issuer:    m.issuer,

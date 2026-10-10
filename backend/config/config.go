@@ -240,7 +240,7 @@ func Load() (*Config, error) {
 		CORS: CORSConfig{
 			AllowedOrigins: origins,
 			AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-			AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"},
+			AllowedHeaders: []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "app-name", "app-device", "app-version", "appName", "appDevice", "appVersion", "X-App-Name", "X-App-Device", "X-App-Version"},
 		},
 	}
 

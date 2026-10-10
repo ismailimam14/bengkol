@@ -2,6 +2,7 @@ package employee
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,26 +25,72 @@ var (
 
 // CreateEmployeeRequest contains the payload for creating an employee.
 type CreateEmployeeRequest struct {
-	UserID         *uuid.UUID `json:"user_id,omitempty"`
-	Name           string     `json:"name"`
-	Email          string     `json:"email,omitempty"`
-	Phone          string     `json:"phone"`
-	Role           string     `json:"role"`
-	Status         string     `json:"status,omitempty"`
-	Specialization string     `json:"specialization,omitempty"`
-	Notes          string     `json:"notes,omitempty"`
+	UserID         *uuid.UUID                  `json:"user_id,omitempty"`
+	Name           string                      `json:"name"`
+	Email          string                      `json:"email,omitempty"`
+	Phone          string                      `json:"phone"`
+	Role           string                      `json:"role"`
+	Status         string                      `json:"status,omitempty"`
+	Specialization string                      `json:"specialization,omitempty"`
+	Notes          string                      `json:"notes,omitempty"`
+	Permissions    *domain.EmployeePermissions `json:"permissions,omitempty"`
+	UnknownPerms   []string                    `json:"-"`
+}
+
+func (r *CreateEmployeeRequest) UnmarshalJSON(data []byte) error {
+	type plain CreateEmployeeRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = CreateEmployeeRequest(p)
+
+	var raw struct {
+		Permissions map[string]json.RawMessage `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil && raw.Permissions != nil {
+		for k := range raw.Permissions {
+			if !domain.IsValidPermissionKey(k) {
+				r.UnknownPerms = append(r.UnknownPerms, k)
+			}
+		}
+	}
+	return nil
 }
 
 // UpdateEmployeeRequest contains the payload for updating an employee.
 type UpdateEmployeeRequest struct {
-	UserID         *uuid.UUID `json:"user_id,omitempty"`
-	Name           *string    `json:"name,omitempty"`
-	Email          *string    `json:"email,omitempty"`
-	Phone          *string    `json:"phone,omitempty"`
-	Role           *string    `json:"role,omitempty"`
-	Status         *string    `json:"status,omitempty"`
-	Specialization *string    `json:"specialization,omitempty"`
-	Notes          *string    `json:"notes,omitempty"`
+	UserID         *uuid.UUID                  `json:"user_id,omitempty"`
+	Name           *string                     `json:"name,omitempty"`
+	Email          *string                     `json:"email,omitempty"`
+	Phone          *string                     `json:"phone,omitempty"`
+	Role           *string                     `json:"role,omitempty"`
+	Status         *string                     `json:"status,omitempty"`
+	Specialization *string                     `json:"specialization,omitempty"`
+	Notes          *string                     `json:"notes,omitempty"`
+	Permissions    *domain.EmployeePermissions `json:"permissions,omitempty"`
+	UnknownPerms   []string                    `json:"-"`
+}
+
+func (r *UpdateEmployeeRequest) UnmarshalJSON(data []byte) error {
+	type plain UpdateEmployeeRequest
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = UpdateEmployeeRequest(p)
+
+	var raw struct {
+		Permissions map[string]json.RawMessage `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil && raw.Permissions != nil {
+		for k := range raw.Permissions {
+			if !domain.IsValidPermissionKey(k) {
+				r.UnknownPerms = append(r.UnknownPerms, k)
+			}
+		}
+	}
+	return nil
 }
 
 // Service defines business operations for workshop employees.
@@ -124,8 +171,27 @@ func (s *employeeService) CreateEmployee(ctx context.Context, workshopID, caller
 	normRole, ok := domain.NormalizeEmployeeRole(req.Role)
 	if !ok {
 		v.AddError("role", "invalid employee role; must be MECHANIC, ADMIN_CASHIER, ADMIN_INVENTORY, ADMIN_BOTH, MANAGER, or OWNER")
-	} else if !isOwner && normRole == domain.EmployeeRoleOwner {
+	} else if !isOwner && callerRole != domain.RoleAdmin && normRole == domain.EmployeeRoleOwner {
 		v.AddError("role", "managers cannot assign the owner role")
+	}
+
+	for _, k := range req.UnknownPerms {
+		v.AddError("permissions."+k, fmt.Sprintf("unknown or invalid permission key: %s", k))
+	}
+
+	normPhone := domain.NormalizePhone(req.Phone)
+	if normPhone != "" {
+		isOwnerPhone, err := s.repo.IsPhoneRegisteredAsOwner(ctx, normPhone)
+		if err == nil && isOwnerPhone {
+			v.AddError("phone", "employee phone number is already registered to a workshop owner")
+		}
+		ownerID, err := s.repo.GetWorkshopOwnerID(ctx, workshopID)
+		if err == nil {
+			existingOwnerUser, err := s.repo.FindUserByPhone(ctx, req.Phone)
+			if err == nil && existingOwnerUser != nil && existingOwnerUser.ID == ownerID {
+				v.AddError("phone", "employee cannot have the same phone number as the workshop owner")
+			}
+		}
 	}
 
 	status := domain.EmployeeStatusActive
@@ -136,6 +202,34 @@ func (s *employeeService) CreateEmployee(ctx context.Context, workshopID, caller
 		} else {
 			status = domain.EmployeeStatus(st)
 		}
+	}
+
+	// Permissions and anti-escalation
+	var assignedPerms *domain.EmployeePermissions
+	if normRole == domain.EmployeeRoleOwner {
+		defOwnerPerms := domain.DefaultPermissionsForRole(domain.EmployeeRoleOwner)
+		assignedPerms = &defOwnerPerms
+	} else if req.Permissions != nil {
+		if !isOwner && callerRole != domain.RoleAdmin {
+			callerEmp, err := s.repo.GetByUserID(ctx, workshopID, callerUserID)
+			if err != nil || callerEmp == nil {
+				return nil, nil, ErrForbidden
+			}
+			callerPerms := callerEmp.CalculatePermissions()
+			if !callerPerms.CanManageRolesAndPermissions {
+				v.AddError("permissions", "you do not have permission to manage roles and permissions")
+			} else {
+				for _, key := range domain.ValidPermissionKeys() {
+					if req.Permissions.HasPermission(key) && !callerPerms.HasPermission(key) {
+						v.AddError("permissions."+key, fmt.Sprintf("cannot grant permission '%s' exceeding caller authority", key))
+					}
+				}
+			}
+		}
+		assignedPerms = req.Permissions
+	} else {
+		defPerms := domain.DefaultPermissionsForRole(normRole)
+		assignedPerms = &defPerms
 	}
 
 	if !v.IsValid() {
@@ -201,6 +295,7 @@ func (s *employeeService) CreateEmployee(ctx context.Context, workshopID, caller
 		Status:          status,
 		Specialization:  strings.TrimSpace(req.Specialization),
 		Notes:           strings.TrimSpace(req.Notes),
+		Permissions:     assignedPerms,
 		InitialPassword: initialPassword,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -233,13 +328,7 @@ func (s *employeeService) GetCurrentEmployee(ctx context.Context, workshopID, ca
 
 	ownerID, err := s.repo.GetWorkshopOwnerID(ctx, workshopID)
 	if err == nil && ownerID == callerUserID {
-		perms := domain.EmployeePermissions{
-			CanManageEmployees:          true,
-			CanManageInventory:          true,
-			CanAccessCashier:            true,
-			CanAccessRepairJobs:         true,
-			CanManageWorkshopOperations: true,
-		}
+		perms := domain.DefaultPermissionsForRole(domain.EmployeeRoleOwner)
 		now := time.Now().UTC()
 		return &domain.WorkshopEmployee{
 			ID:          uuid.Nil,
@@ -295,11 +384,15 @@ func (s *employeeService) UpdateEmployee(ctx context.Context, workshopID, employ
 	}
 
 	// Managers cannot modify Owner
-	if !isOwner && emp.Role == domain.EmployeeRoleOwner {
+	if !isOwner && callerRole != domain.RoleAdmin && emp.Role == domain.EmployeeRoleOwner {
 		return nil, nil, ErrCannotModifyOwner
 	}
 
 	v := validator.New()
+
+	for _, k := range req.UnknownPerms {
+		v.AddError("permissions."+k, fmt.Sprintf("unknown or invalid permission key: %s", k))
+	}
 
 	if req.UserID != nil {
 		emp.UserID = req.UserID
@@ -312,6 +405,20 @@ func (s *employeeService) UpdateEmployee(ctx context.Context, workshopID, employ
 	if req.Phone != nil {
 		phone := strings.TrimSpace(*req.Phone)
 		v.Required("phone", phone)
+		normPhone := domain.NormalizePhone(phone)
+		if normPhone != domain.NormalizePhone(emp.Phone) {
+			isOwnerPhone, err := s.repo.IsPhoneRegisteredAsOwner(ctx, normPhone)
+			if err == nil && isOwnerPhone {
+				v.AddError("phone", "employee phone number is already registered to a workshop owner")
+			}
+			ownerID, err := s.repo.GetWorkshopOwnerID(ctx, workshopID)
+			if err == nil {
+				existingOwnerUser, err := s.repo.FindUserByPhone(ctx, phone)
+				if err == nil && existingOwnerUser != nil && existingOwnerUser.ID == ownerID {
+					v.AddError("phone", "employee cannot have the same phone number as the workshop owner")
+				}
+			}
+		}
 		emp.Phone = phone
 	}
 	if req.Email != nil {
@@ -323,13 +430,20 @@ func (s *employeeService) UpdateEmployee(ctx context.Context, workshopID, employ
 	if req.Notes != nil {
 		emp.Notes = strings.TrimSpace(*req.Notes)
 	}
+
+	var targetRole = emp.Role
+	roleChanged := false
 	if req.Role != nil {
 		normRole, ok := domain.NormalizeEmployeeRole(*req.Role)
 		if !ok {
 			v.AddError("role", "invalid employee role; must be MECHANIC, ADMIN_CASHIER, ADMIN_INVENTORY, ADMIN_BOTH, MANAGER, or OWNER")
-		} else if !isOwner && normRole == domain.EmployeeRoleOwner {
+		} else if !isOwner && callerRole != domain.RoleAdmin && normRole == domain.EmployeeRoleOwner {
 			v.AddError("role", "managers cannot assign the owner role")
 		} else {
+			if normRole != emp.Role {
+				roleChanged = true
+			}
+			targetRole = normRole
 			emp.Role = normRole
 		}
 	}
@@ -340,6 +454,34 @@ func (s *employeeService) UpdateEmployee(ctx context.Context, workshopID, employ
 		} else {
 			emp.Status = domain.EmployeeStatus(st)
 		}
+	}
+
+	// Permissions update & Anti-Escalation
+	if req.Permissions != nil {
+		if emp.Role == domain.EmployeeRoleOwner || targetRole == domain.EmployeeRoleOwner {
+			v.AddError("permissions", "owner permissions are immutable")
+		} else if !isOwner && callerRole != domain.RoleAdmin {
+			callerEmp, err := s.repo.GetByUserID(ctx, workshopID, callerUserID)
+			if err != nil || callerEmp == nil {
+				return nil, nil, ErrForbidden
+			}
+			callerPerms := callerEmp.CalculatePermissions()
+			if !callerPerms.CanManageRolesAndPermissions {
+				v.AddError("permissions", "you do not have permission to manage roles and permissions")
+			} else {
+				for _, key := range domain.ValidPermissionKeys() {
+					if req.Permissions.HasPermission(key) && !callerPerms.HasPermission(key) {
+						v.AddError("permissions."+key, fmt.Sprintf("cannot grant permission '%s' exceeding caller authority", key))
+					}
+				}
+			}
+		}
+		if v.IsValid() {
+			emp.Permissions = req.Permissions
+		}
+	} else if roleChanged {
+		defPerms := domain.DefaultPermissionsForRole(targetRole)
+		emp.Permissions = &defPerms
 	}
 
 	if !v.IsValid() {

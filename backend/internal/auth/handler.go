@@ -10,6 +10,7 @@ import (
 	"github.com/bengkol/backend/pkg/response"
 	"github.com/bengkol/backend/pkg/security"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 )
 
 // Handler handles authentication HTTP requests.
@@ -34,6 +35,9 @@ func (h *Handler) Routes() chi.Router {
 	r.Post("/login", h.Login)
 	r.Post("/refresh", h.RefreshToken)
 	r.Post("/logout", h.Logout)
+	r.With(middleware.RequireAuthenticated).Post("/get-permissions", h.GetPermissions)
+	r.With(middleware.RequireAuthenticated).Post("/select-workshop", h.GetPermissions)
+	r.With(middleware.RequireAuthenticated).Get("/me", h.GetMe)
 	r.With(middleware.RequireAuthenticated).Put("/password", h.ChangePassword)
 	r.With(middleware.RequireAuthenticated).Post("/change-password", h.ChangePassword)
 
@@ -86,12 +90,55 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			response.Error(w, http.StatusUnauthorized, response.ErrCodeUnauthorized, "Invalid credentials")
 			return
 		}
+		if errors.Is(err, ErrNoWorkshopAccess) {
+			response.Error(w, http.StatusForbidden, response.ErrCodeNoWorkshopAccess, "User has no associated workshops")
+			return
+		}
 		h.logger.WithContext(r.Context()).Error("failed to login user", "error", err)
 		response.Error(w, http.StatusInternalServerError, response.ErrCodeInternalServerError, "Login request failed")
 		return
 	}
 
 	response.Success(w, http.StatusOK, authResp)
+}
+
+// GetPermissions selects a workshop and returns a workshop-scoped token pair and permissions.
+func (h *Handler) GetPermissions(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.GetUserID(r.Context())
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, response.ErrCodeUnauthorized, "Authentication required")
+		return
+	}
+
+	var req GetPermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, response.ErrCodeBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.WorkshopID == uuid.Nil {
+		response.ErrorWithDetails(w, http.StatusUnprocessableEntity, response.ErrCodeValidationFailed, "Input validation failed", map[string]string{
+			"workshop_id": "workshop_id is required",
+		})
+		return
+	}
+
+	resp, err := h.service.GetPermissions(r.Context(), userID, req)
+	if err != nil {
+		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrNoWorkshopAccess) || errors.Is(err, ErrEmployeeInactive) {
+			response.Error(w, http.StatusForbidden, response.ErrCodeForbidden, "You do not have active access to this workshop")
+			return
+		}
+		if errors.Is(err, ErrWorkshopNotFound) {
+			response.Error(w, http.StatusNotFound, response.ErrCodeNotFound, "Workshop not found")
+			return
+		}
+		h.logger.WithContext(r.Context()).Error("failed to get workshop permissions", "error", err)
+		response.Error(w, http.StatusInternalServerError, response.ErrCodeInternalServerError, "Failed to get workshop permissions")
+		return
+	}
+
+	response.Success(w, http.StatusOK, resp)
 }
 
 // RefreshToken exchanges an active refresh token for a new token pair (rotation).

@@ -49,6 +49,35 @@ func setupTestApp() (chi.Router, auth.Service, *security.JWTManager) {
 	return router, authSvc, jwtMgr
 }
 
+func setupTestAppWithRepo() (chi.Router, auth.Service, *mockAuthRepo, *security.JWTManager) {
+	repo := newMockAuthRepo()
+	jwtMgr := security.NewJWTManager("test-secret-key-at-least-32-chars-long", "test-refresh-secret", 15, 7)
+	var buf bytes.Buffer
+	log := logger.NewWithOutput("development", "debug", &buf)
+	authSvc := auth.NewService(repo, jwtMgr, log)
+	authHdl := auth.NewHandler(authSvc, log)
+	healthHdl := handler.NewHealthHandler(nil)
+
+	cfg := &config.Config{
+		AppEnv: "development",
+		CORS: config.CORSConfig{
+			AllowedOrigins: []string{"*"},
+			AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+			AllowedHeaders: []string{"Content-Type", "Authorization"},
+		},
+	}
+
+	router := handler.NewRouter(handler.RouterConfig{
+		Config:        cfg,
+		Logger:        log,
+		HealthHandler: healthHdl,
+		AuthHandler:   authHdl,
+		JWTManager:    jwtMgr,
+	})
+
+	return router, authSvc, repo, jwtMgr
+}
+
 func TestHandler_Register_Success(t *testing.T) {
 	app, _, _ := setupTestApp()
 
@@ -472,6 +501,290 @@ func TestHandler_ChangePassword(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandler_Login_BengkolAdmin_NoWorkshops_Forbidden(t *testing.T) {
+	app, svc, _, _ := setupTestAppWithRepo()
+
+	_, _, err := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Zero Workshop User",
+		Email:    "zerows@example.com",
+		Password: "password123",
+		Phone:    "0888111222",
+		Role:     domain.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("failed to register user: %v", err)
+	}
+
+	payload := map[string]interface{}{
+		"email":    "zerows@example.com",
+		"password": "password123",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("app-name", "bengkolAdmin")
+	req.Header.Set("app-device", "web")
+	req.Header.Set("app-version", "1.0")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for zero workshops on bengkolAdmin, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var errResp response.Response
+	_ = json.Unmarshal(rec.Body.Bytes(), &errResp)
+	if errResp.Error == nil || errResp.Error.Code != response.ErrCodeNoWorkshopAccess {
+		t.Errorf("expected error code %s, got %+v", response.ErrCodeNoWorkshopAccess, errResp.Error)
+	}
+}
+
+func TestHandler_Login_BengkolAdmin_SingleWorkshop_AutoSelected(t *testing.T) {
+	app, svc, repo, _ := setupTestAppWithRepo()
+
+	regResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Single WS Owner",
+		Email:    "singlews@example.com",
+		Password: "password123",
+		Phone:    "0888222333",
+		Role:     domain.RoleOwner,
+	})
+
+	wsID := uuid.New()
+	ws := domain.Workshop{ID: wsID, OwnerID: regResp.User.ID, Name: "Workshop One", Status: domain.WorkshopStatusActive}
+	repo.workshopsByUserID[regResp.User.ID] = []domain.Workshop{ws}
+	repo.workshopsByID[wsID] = &ws
+
+	payload := map[string]interface{}{
+		"email":    "singlews@example.com",
+		"password": "password123",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("app-name", "bengkolAdmin")
+	req.Header.Set("app-device", "web")
+	req.Header.Set("app-version", "1.0")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Success bool              `json:"success"`
+		Data    auth.AuthResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if resp.Data.SelectedWorkshopID == nil || *resp.Data.SelectedWorkshopID != wsID {
+		t.Errorf("expected auto-selected workshop ID %s, got %v", wsID, resp.Data.SelectedWorkshopID)
+	}
+	if resp.Data.RequiresWorkshopSelection {
+		t.Errorf("expected requires_workshop_selection = false for single workshop")
+	}
+}
+
+func TestHandler_Login_BengkolAdmin_MultipleWorkshops_RequiresSelection(t *testing.T) {
+	app, svc, repo, _ := setupTestAppWithRepo()
+
+	regResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Multi WS Owner",
+		Email:    "multiws@example.com",
+		Password: "password123",
+		Phone:    "0888333444",
+		Role:     domain.RoleOwner,
+	})
+
+	ws1 := domain.Workshop{ID: uuid.New(), OwnerID: regResp.User.ID, Name: "Shop A", Status: domain.WorkshopStatusActive}
+	ws2 := domain.Workshop{ID: uuid.New(), OwnerID: regResp.User.ID, Name: "Shop B", Status: domain.WorkshopStatusActive}
+	repo.workshopsByUserID[regResp.User.ID] = []domain.Workshop{ws1, ws2}
+	repo.workshopsByID[ws1.ID] = &ws1
+	repo.workshopsByID[ws2.ID] = &ws2
+
+	payload := map[string]interface{}{
+		"email":    "multiws@example.com",
+		"password": "password123",
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("appName", "bengkolAdmin")
+	req.Header.Set("appDevice", "web")
+	req.Header.Set("appVersion", "1.0")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Success bool              `json:"success"`
+		Data    auth.AuthResponse `json:"data"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	if !resp.Data.RequiresWorkshopSelection {
+		t.Errorf("expected requires_workshop_selection = true for multiple workshops")
+	}
+	if len(resp.Data.Workshops) != 2 {
+		t.Errorf("expected 2 workshops, got %d", len(resp.Data.Workshops))
+	}
+}
+
+func TestHandler_GetPermissions_SuccessAndAlias(t *testing.T) {
+	app, svc, repo, _ := setupTestAppWithRepo()
+
+	userResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Perms Tester",
+		Email:    "permstester@example.com",
+		Password: "password123",
+		Phone:    "0888444555",
+		Role:     domain.RoleOwner,
+	})
+
+	wsID := uuid.New()
+	ws := domain.Workshop{ID: wsID, OwnerID: userResp.User.ID, Name: "Perms Workshop", Status: domain.WorkshopStatusActive}
+	repo.workshopsByID[wsID] = &ws
+
+	// 1. POST /api/v1/auth/get-permissions
+	payload := map[string]interface{}{
+		"workshop_id": wsID,
+	}
+	body, _ := json.Marshal(payload)
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/get-permissions", bytes.NewReader(body))
+	req1.Header.Set("Authorization", "Bearer "+userResp.Tokens.AccessToken)
+	req1.Header.Set("Content-Type", "application/json")
+	rec1 := httptest.NewRecorder()
+
+	app.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for /get-permissions, got %d: %s", rec1.Code, rec1.Body.String())
+	}
+
+	var resp1 struct {
+		Success bool                        `json:"success"`
+		Data    auth.GetPermissionsResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("failed to decode get-permissions response: %v", err)
+	}
+
+	if resp1.Data.WorkshopID != wsID {
+		t.Errorf("expected workshop ID %s, got %s", wsID, resp1.Data.WorkshopID)
+	}
+	if resp1.Data.Permissions == nil || !resp1.Data.Permissions.CanManageRolesAndPermissions {
+		t.Errorf("expected owner permissions granted")
+	}
+
+	// 2. Alias: POST /api/v1/auth/select-workshop
+	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/auth/select-workshop", bytes.NewReader(body))
+	req2.Header.Set("Authorization", "Bearer "+userResp.Tokens.AccessToken)
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+
+	app.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for alias /select-workshop, got %d: %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestHandler_GetPermissions_UnauthorizedWorkshop(t *testing.T) {
+	app, svc, repo, _ := setupTestAppWithRepo()
+
+	userResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Other User",
+		Email:    "otheruser@example.com",
+		Password: "password123",
+		Phone:    "0888555666",
+		Role:     domain.RoleCustomer,
+	})
+
+	alienWsID := uuid.New()
+	alienWs := domain.Workshop{ID: alienWsID, OwnerID: uuid.New(), Name: "Alien Workshop", Status: domain.WorkshopStatusActive}
+	repo.workshopsByID[alienWsID] = &alienWs
+
+	payload := map[string]interface{}{
+		"workshop_id": alienWsID,
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/get-permissions", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+userResp.Tokens.AccessToken)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for unauthorized workshop, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandler_GetMe_WithWorkshopContext(t *testing.T) {
+	app, svc, repo, jwtMgr := setupTestAppWithRepo()
+
+	regResp, _, _ := svc.Register(context.Background(), auth.RegisterRequest{
+		Name:     "Profile Detail Tester",
+		Email:    "detailme@example.com",
+		Password: "password123",
+		Phone:    "0888666777",
+		Role:     domain.RoleOwner,
+	})
+
+	wsID := uuid.New()
+	ws := domain.Workshop{ID: wsID, OwnerID: regResp.User.ID, Name: "Profile Detail Workshop", Status: domain.WorkshopStatusActive}
+	repo.workshopsByUserID[regResp.User.ID] = []domain.Workshop{ws}
+	repo.workshopsByID[wsID] = &ws
+
+	perms := domain.DefaultPermissionsForRole(domain.EmployeeRoleOwner)
+	scopedTokens, _, _ := jwtMgr.GenerateScopedTokenPair(regResp.User, &wsID, domain.RoleOwner, &perms)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	req.Header.Set("Authorization", "Bearer "+scopedTokens.AccessToken)
+	req.Header.Set("app-name", "bengkolAdmin")
+	req.Header.Set("app-device", "web")
+	req.Header.Set("app-version", "1.0")
+	rec := httptest.NewRecorder()
+
+	app.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Success bool                    `json:"success"`
+		Data    auth.UserDetailResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal UserDetailResponse: %v", err)
+	}
+
+	if resp.Data.SelectedWorkshopID == nil || *resp.Data.SelectedWorkshopID != wsID {
+		t.Errorf("expected selected workshop ID %s, got %v", wsID, resp.Data.SelectedWorkshopID)
+	}
+	if resp.Data.Role != domain.RoleOwner {
+		t.Errorf("expected role OWNER, got %s", resp.Data.Role)
+	}
+	if resp.Data.Permissions == nil || !resp.Data.Permissions.CanManageRolesAndPermissions {
+		t.Errorf("expected permissions in /me response")
 	}
 }
 

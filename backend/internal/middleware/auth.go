@@ -15,10 +15,12 @@ import (
 type contextKey string
 
 const (
-	ClaimsKey    contextKey = "user_claims"
-	UserIDKey    contextKey = "user_id"
-	UserRoleKey  contextKey = "user_role"
-	UserEmailKey contextKey = "user_email"
+	ClaimsKey      contextKey = "user_claims"
+	UserIDKey      contextKey = "user_id"
+	UserRoleKey    contextKey = "user_role"
+	UserEmailKey   contextKey = "user_email"
+	WorkshopIDKey  contextKey = "workshop_id"
+	PermissionsKey contextKey = "user_permissions"
 )
 
 // Authenticate middleware validates the Bearer JWT access token and enriches request context.
@@ -48,6 +50,12 @@ func Authenticate(jwtMgr *security.JWTManager, log *logger.Logger) func(next htt
 			ctx = context.WithValue(ctx, UserIDKey, claims.UserID)
 			ctx = context.WithValue(ctx, UserRoleKey, claims.Role)
 			ctx = context.WithValue(ctx, UserEmailKey, claims.Email)
+			if claims.WorkshopID != nil {
+				ctx = context.WithValue(ctx, WorkshopIDKey, *claims.WorkshopID)
+			}
+			if claims.Permissions != nil {
+				ctx = context.WithValue(ctx, PermissionsKey, claims.Permissions)
+			}
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
@@ -94,6 +102,55 @@ func RequireRoles(allowedRoles ...domain.UserRole) func(next http.Handler) http.
 	}
 }
 
+// RequireWorkshopContext ensures the request has an active workshop-scoped token.
+func RequireWorkshopContext(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		workshopID, ok := GetWorkshopID(r.Context())
+		if !ok || workshopID == uuid.Nil {
+			response.Error(w, http.StatusForbidden, response.ErrCodeForbidden, "A selected workshop context is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequirePermission checks if the authenticated user has a specific permission key.
+func RequirePermission(permKey string) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			role, ok := GetUserRole(r.Context())
+			if !ok {
+				response.Error(w, http.StatusUnauthorized, response.ErrCodeUnauthorized, "Authentication required")
+				return
+			}
+
+			// Workshop OWNER always has universal access across all workshop permissions
+			if role == domain.RoleOwner {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			perms, hasPerms := GetPermissions(r.Context())
+			if hasPerms && perms != nil {
+				if perms.HasPermission(permKey) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				response.Error(w, http.StatusForbidden, response.ErrCodeForbidden, "You do not have permission to perform this action")
+				return
+			}
+
+			defPerms := domain.DefaultPermissionsForRole(domain.EmployeeRole(role))
+			if defPerms.HasPermission(permKey) {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			response.Error(w, http.StatusForbidden, response.ErrCodeForbidden, "You do not have permission to perform this action")
+		})
+	}
+}
+
 // GetClaims retrieves CustomClaims from request context.
 func GetClaims(ctx context.Context) (*security.CustomClaims, bool) {
 	claims, ok := ctx.Value(ClaimsKey).(*security.CustomClaims)
@@ -110,4 +167,16 @@ func GetUserID(ctx context.Context) (uuid.UUID, bool) {
 func GetUserRole(ctx context.Context) (domain.UserRole, bool) {
 	role, ok := ctx.Value(UserRoleKey).(domain.UserRole)
 	return role, ok
+}
+
+// GetWorkshopID retrieves WorkshopID from context.
+func GetWorkshopID(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := ctx.Value(WorkshopIDKey).(uuid.UUID)
+	return id, ok
+}
+
+// GetPermissions retrieves EmployeePermissions from context.
+func GetPermissions(ctx context.Context) (*domain.EmployeePermissions, bool) {
+	p, ok := ctx.Value(PermissionsKey).(*domain.EmployeePermissions)
+	return p, ok
 }

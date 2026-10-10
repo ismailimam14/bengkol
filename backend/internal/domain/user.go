@@ -13,6 +13,8 @@ const (
 	RoleCustomer UserRole = "CUSTOMER"
 	RoleOwner    UserRole = "OWNER"
 	RoleAdmin    UserRole = "ADMIN"
+	RoleMechanic UserRole = "MECHANIC"
+	RoleManager  UserRole = "MANAGER"
 )
 
 // User represents a system user
