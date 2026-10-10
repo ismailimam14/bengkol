@@ -26,8 +26,12 @@ const (
 
 // Supported Application Devices
 const (
-	AppDeviceMobileApp = "mobile app"
-	AppDeviceWeb       = "web"
+	AppDeviceAndroid = "android"
+	AppDeviceTablet  = "tablet"
+	AppDeviceWeb     = "web"
+
+	// Deprecated: AppDeviceMobileApp is kept for backward compatibility alias.
+	AppDeviceMobileApp = "android"
 )
 
 const (
@@ -69,7 +73,7 @@ func ValidateAppHeaders(strict bool) func(next http.Handler) http.Handler {
 			if rawAppName == "" && rawAppDevice == "" && rawAppVersion == "" {
 				if !strict {
 					ctx := context.WithValue(r.Context(), AppNameKey, AppNameBengkol)
-					ctx = context.WithValue(ctx, AppDeviceKey, AppDeviceMobileApp)
+					ctx = context.WithValue(ctx, AppDeviceKey, AppDeviceAndroid)
 					ctx = context.WithValue(ctx, AppVersionKey, "1.0")
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
@@ -99,12 +103,14 @@ func ValidateAppHeaders(strict bool) func(next http.Handler) http.Handler {
 			// 2. Validate & Normalize appDevice
 			var normalizedAppDevice string
 			switch strings.ToLower(strings.TrimSpace(rawAppDevice)) {
-			case AppDeviceMobileApp, "mobile", "mobileapp":
-				normalizedAppDevice = AppDeviceMobileApp
+			case AppDeviceAndroid, "mobile app", "mobile", "mobileapp":
+				normalizedAppDevice = AppDeviceAndroid
+			case AppDeviceTablet:
+				normalizedAppDevice = AppDeviceTablet
 			case AppDeviceWeb:
 				normalizedAppDevice = AppDeviceWeb
 			default:
-				valErrors["app-device"] = "app-device header is required and must be either 'mobile app' or 'web'"
+				valErrors["app-device"] = "app-device header is required and must be either 'android', 'tablet', or 'web'"
 				valErrors["appDevice"] = valErrors["app-device"]
 			}
 

@@ -2214,13 +2214,14 @@ components:
       name: app-device
       in: header
       required: true
-      description: Client device type ('mobile app' or 'web').
+      description: Client device type ('android', 'tablet', or 'web').
       schema:
         type: string
         enum:
-          - mobile app
+          - android
+          - tablet
           - web
-        example: mobile app
+        example: android
     AppVersionHeader:
       name: app-version
       in: header

@@ -19,14 +19,25 @@ func TestValidateAppHeaders_Strict_Valid(t *testing.T) {
 		wantVersion string
 	}{
 		{
-			name: "kebab-case: bengkol customer app on mobile app",
+			name: "kebab-case: bengkol customer app on android",
 			headers: map[string]string{
 				"app-name":    "bengkol",
-				"app-device":  "mobile app",
+				"app-device":  "android",
 				"app-version": "1.0",
 			},
 			wantName:    "bengkol",
-			wantDevice:  "mobile app",
+			wantDevice:  "android",
+			wantVersion: "1.0",
+		},
+		{
+			name: "kebab-case: bengkol customer app on tablet",
+			headers: map[string]string{
+				"app-name":    "bengkol",
+				"app-device":  "tablet",
+				"app-version": "1.0",
+			},
+			wantName:    "bengkol",
+			wantDevice:  "tablet",
 			wantVersion: "1.0",
 		},
 		{
@@ -41,14 +52,36 @@ func TestValidateAppHeaders_Strict_Valid(t *testing.T) {
 			wantVersion: "2.0.1",
 		},
 		{
-			name: "legacy camelCase: bengkol customer app on mobile app",
+			name: "legacy mobile app maps to android",
+			headers: map[string]string{
+				"app-name":    "bengkol",
+				"app-device":  "mobile app",
+				"app-version": "1.0",
+			},
+			wantName:    "bengkol",
+			wantDevice:  "android",
+			wantVersion: "1.0",
+		},
+		{
+			name: "legacy camelCase: bengkol customer app on android",
 			headers: map[string]string{
 				"appName":    "bengkol",
-				"appDevice":  "mobile app",
+				"appDevice":  "android",
 				"appVersion": "1.0",
 			},
 			wantName:    "bengkol",
-			wantDevice:  "mobile app",
+			wantDevice:  "android",
+			wantVersion: "1.0",
+		},
+		{
+			name: "legacy camelCase: bengkol customer app on tablet",
+			headers: map[string]string{
+				"appName":    "bengkol",
+				"appDevice":  "tablet",
+				"appVersion": "1.0",
+			},
+			wantName:    "bengkol",
+			wantDevice:  "tablet",
 			wantVersion: "1.0",
 		},
 		{
@@ -66,11 +99,11 @@ func TestValidateAppHeaders_Strict_Valid(t *testing.T) {
 			name: "headers with X- prefix and case insensitivity",
 			headers: map[string]string{
 				"X-App-Name":    "bengkoladmin",
-				"X-App-Device":  "WEB",
+				"X-App-Device":  "TABLET",
 				"X-App-Version": "1.2",
 			},
 			wantName:    "bengkolAdmin",
-			wantDevice:  "web",
+			wantDevice:  "tablet",
 			wantVersion: "1.2",
 		},
 	}
@@ -212,6 +245,10 @@ func TestValidateAppHeaders_NonStrict_Fallback(t *testing.T) {
 		appName, _ := middleware.GetAppName(r.Context())
 		if appName != "bengkol" {
 			t.Errorf("expected default appName 'bengkol', got %q", appName)
+		}
+		appDevice, _ := middleware.GetAppDevice(r.Context())
+		if appDevice != "android" {
+			t.Errorf("expected default appDevice 'android', got %q", appDevice)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
