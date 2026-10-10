@@ -599,17 +599,17 @@ func (h *Handler) UpdateOperatingHours(w http.ResponseWriter, r *http.Request) {
 	response.Success(w, http.StatusOK, hours)
 }
 
-// GetMyWorkshops returns all workshops owned by the authenticated owner.
+// GetMyWorkshops returns all workshops owned by or employing the authenticated user.
 func (h *Handler) GetMyWorkshops(w http.ResponseWriter, r *http.Request) {
-	ownerID, ok := middleware.GetUserID(r.Context())
+	userID, ok := middleware.GetUserID(r.Context())
 	if !ok {
 		response.Error(w, http.StatusUnauthorized, response.ErrCodeUnauthorized, "Authentication required")
 		return
 	}
 
-	list, err := h.service.GetMyWorkshops(r.Context(), ownerID)
+	list, err := h.service.GetMyWorkshops(r.Context(), userID)
 	if err != nil {
-		h.logger.WithContext(r.Context()).Error("failed to get owner workshops", "owner_id", ownerID, "error", err)
+		h.logger.WithContext(r.Context()).Error("failed to get user workshops", "user_id", userID, "error", err)
 		response.Error(w, http.StatusInternalServerError, response.ErrCodeInternalServerError, "Failed to retrieve workshops")
 		return
 	}

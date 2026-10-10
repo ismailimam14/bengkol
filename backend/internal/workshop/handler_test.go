@@ -541,4 +541,83 @@ func TestHandler_Workshop_GetPhoto_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandler_Workshop_GetMyWorkshops_EmployeeAndOwner(t *testing.T) {
+	app, wsRepo, jwtMgr := setupTestAppWithWorkshop()
+
+	ownerID := uuid.New()
+	empUserID := uuid.New()
+	wsID := uuid.New()
+
+	ownerUser := &domain.User{ID: ownerID, Email: "owner@bengkol.com", Role: domain.RoleOwner}
+	empUser := &domain.User{ID: empUserID, Email: "inventory@bengkol.com", Role: domain.RoleCustomer}
+
+	ownerTokens, _, _ := jwtMgr.GenerateTokenPair(ownerUser)
+	empTokens, _, _ := jwtMgr.GenerateTokenPair(empUser)
+
+	ws := &domain.Workshop{
+		ID:       wsID,
+		OwnerID:  ownerID,
+		Name:     "Bengkol Service Center",
+		Address:  "Jl. Kebon Jeruk No. 1",
+		Status:   domain.WorkshopStatusActive,
+		Photos:   []string{},
+	}
+	wsRepo.workshops[wsID] = ws
+	wsRepo.employees[wsID] = []domain.WorkshopEmployee{
+		{
+			ID:         uuid.New(),
+			WorkshopID: wsID,
+			UserID:     &empUserID,
+			Name:       "Inventory Staff",
+			Role:       domain.EmployeeRoleAdminInventory,
+			Status:     domain.EmployeeStatusActive,
+		},
+	}
+
+	// 1. Unauthenticated -> 401
+	unauthReq := httptest.NewRequest(http.MethodGet, "/api/v1/me/workshops", nil)
+	unauthRec := httptest.NewRecorder()
+	app.ServeHTTP(unauthRec, unauthReq)
+	if unauthRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized for unauthenticated call, got %d", unauthRec.Code)
+	}
+
+	// 2. Owner -> 200 with workshop
+	ownerReq := httptest.NewRequest(http.MethodGet, "/api/v1/me/workshops", nil)
+	ownerReq.Header.Set("Authorization", "Bearer "+ownerTokens.AccessToken)
+	ownerRec := httptest.NewRecorder()
+	app.ServeHTTP(ownerRec, ownerReq)
+	if ownerRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for owner, got %d: %s", ownerRec.Code, ownerRec.Body.String())
+	}
+	var ownerResp struct {
+		Data []domain.Workshop `json:"data"`
+	}
+	if err := json.Unmarshal(ownerRec.Body.Bytes(), &ownerResp); err != nil {
+		t.Fatalf("failed to parse owner response: %v", err)
+	}
+	if len(ownerResp.Data) != 1 || ownerResp.Data[0].ID != wsID {
+		t.Fatalf("expected owner to get workshop %s, got %d items", wsID, len(ownerResp.Data))
+	}
+
+	// 3. Employee -> 200 with workshop
+	empReq := httptest.NewRequest(http.MethodGet, "/api/v1/me/workshops", nil)
+	empReq.Header.Set("Authorization", "Bearer "+empTokens.AccessToken)
+	empRec := httptest.NewRecorder()
+	app.ServeHTTP(empRec, empReq)
+	if empRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for employee, got %d: %s", empRec.Code, empRec.Body.String())
+	}
+	var empResp struct {
+		Data []domain.Workshop `json:"data"`
+	}
+	if err := json.Unmarshal(empRec.Body.Bytes(), &empResp); err != nil {
+		t.Fatalf("failed to parse employee response: %v", err)
+	}
+	if len(empResp.Data) != 1 || empResp.Data[0].ID != wsID {
+		t.Fatalf("expected employee to get workshop %s, got %d items", wsID, len(empResp.Data))
+	}
+}
+
+
 

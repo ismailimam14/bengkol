@@ -278,6 +278,28 @@ paths:
               schema:
                 $ref: '#/components/schemas/ValidationErrorResponse'
 
+  /api/v1/me/workshops:
+    get:
+      summary: Get user workshops
+      description: Returns all workshops where the authenticated caller is the registered owner or an active workshop employee. Enables owners and employees (mechanics, inventory admins, cashiers, managers) to retrieve their workshop details and workshop ID after login.
+      tags:
+        - Workshops
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of workshops owned by or employing the user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkshopListResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /api/v1/workshops:
     get:
       summary: List workshops

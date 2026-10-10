@@ -47,11 +47,25 @@ func (m *mockWorkshopRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.W
 	return &copied, nil
 }
 
-func (m *mockWorkshopRepo) GetByOwnerID(ctx context.Context, ownerID uuid.UUID) ([]domain.Workshop, error) {
+func (m *mockWorkshopRepo) GetByOwnerID(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error) {
 	var list []domain.Workshop
+	seen := make(map[uuid.UUID]bool)
 	for _, w := range m.workshops {
-		if w.OwnerID == ownerID {
+		if w.OwnerID == userID {
 			list = append(list, *w)
+			seen[w.ID] = true
+			continue
+		}
+		if emps, ok := m.employees[w.ID]; ok {
+			for _, emp := range emps {
+				if emp.UserID != nil && *emp.UserID == userID && emp.Status == domain.EmployeeStatusActive {
+					if !seen[w.ID] {
+						list = append(list, *w)
+						seen[w.ID] = true
+					}
+					break
+				}
+			}
 		}
 	}
 	return list, nil
@@ -616,4 +630,84 @@ func TestCreateWorkshop_WithInitialEmployees(t *testing.T) {
 		t.Errorf("expected loaded workshop to have 5 employees, got %d", len(loaded.Employees))
 	}
 }
+
+func TestService_GetMyWorkshops_OwnerAndEmployee(t *testing.T) {
+	repo := newMockWorkshopRepo()
+	var buf bytes.Buffer
+	log := logger.NewWithOutput("development", "debug", &buf)
+	svc := workshop.NewService(repo, log)
+
+	ownerID := uuid.New()
+	activeEmpUserID := uuid.New()
+	inactiveEmpUserID := uuid.New()
+	unrelatedUserID := uuid.New()
+
+	wsID := uuid.New()
+	ws := &domain.Workshop{
+		ID:       wsID,
+		OwnerID:  ownerID,
+		Name:     "Bengkel Jaya Motor",
+		Address:  "Jl. Merdeka No. 10",
+		Status:   domain.WorkshopStatusActive,
+		Photos:   []string{},
+	}
+	repo.workshops[wsID] = ws
+
+	activeEmp := domain.WorkshopEmployee{
+		ID:         uuid.New(),
+		WorkshopID: wsID,
+		UserID:     &activeEmpUserID,
+		Name:       "Staff Inventory",
+		Role:       domain.EmployeeRoleAdminInventory,
+		Status:     domain.EmployeeStatusActive,
+	}
+	inactiveEmp := domain.WorkshopEmployee{
+		ID:         uuid.New(),
+		WorkshopID: wsID,
+		UserID:     &inactiveEmpUserID,
+		Name:       "Mantan Staff",
+		Role:       domain.EmployeeRoleMechanic,
+		Status:     domain.EmployeeStatusInactive,
+	}
+	repo.employees[wsID] = []domain.WorkshopEmployee{activeEmp, inactiveEmp}
+
+	ctx := context.Background()
+
+	// 1. Owner gets workshop
+	ownerList, err := svc.GetMyWorkshops(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("unexpected error for owner: %v", err)
+	}
+	if len(ownerList) != 1 || ownerList[0].ID != wsID {
+		t.Fatalf("expected 1 workshop for owner, got %d", len(ownerList))
+	}
+
+	// 2. Active employee gets workshop
+	empList, err := svc.GetMyWorkshops(ctx, activeEmpUserID)
+	if err != nil {
+		t.Fatalf("unexpected error for active employee: %v", err)
+	}
+	if len(empList) != 1 || empList[0].ID != wsID {
+		t.Fatalf("expected 1 workshop for active employee, got %d", len(empList))
+	}
+
+	// 3. Inactive employee does not get workshop
+	inactiveList, err := svc.GetMyWorkshops(ctx, inactiveEmpUserID)
+	if err != nil {
+		t.Fatalf("unexpected error for inactive employee: %v", err)
+	}
+	if len(inactiveList) != 0 {
+		t.Fatalf("expected 0 workshops for inactive employee, got %d", len(inactiveList))
+	}
+
+	// 4. Unrelated user gets 0 workshops
+	unrelatedList, err := svc.GetMyWorkshops(ctx, unrelatedUserID)
+	if err != nil {
+		t.Fatalf("unexpected error for unrelated user: %v", err)
+	}
+	if len(unrelatedList) != 0 {
+		t.Fatalf("expected 0 workshops for unrelated user, got %d", len(unrelatedList))
+	}
+}
+
 

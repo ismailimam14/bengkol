@@ -80,7 +80,7 @@ type Service interface {
 	GetWorkshopByID(ctx context.Context, id uuid.UUID) (*domain.Workshop, error)
 	ListWorkshops(ctx context.Context, pagination domain.PaginationParams, filter WorkshopFilter) ([]domain.Workshop, *response.Meta, error)
 	FindNearbyWorkshops(ctx context.Context, params NearbyParams) ([]domain.Workshop, error)
-	GetMyWorkshops(ctx context.Context, ownerID uuid.UUID) ([]domain.Workshop, error)
+	GetMyWorkshops(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error)
 	UpdateWorkshop(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, req UpdateWorkshopRequest) (*domain.Workshop, map[string]string, error)
 	GetOperatingHours(ctx context.Context, workshopID uuid.UUID) ([]domain.OperatingHour, error)
 	UpdateOperatingHours(ctx context.Context, workshopID uuid.UUID, requestingUserID uuid.UUID, requestingRole domain.UserRole, hours []OperatingHourInput) ([]domain.OperatingHour, map[string]string, error)
@@ -346,8 +346,8 @@ func (s *workshopService) FindNearbyWorkshops(ctx context.Context, params Nearby
 	return list, nil
 }
 
-func (s *workshopService) GetMyWorkshops(ctx context.Context, ownerID uuid.UUID) ([]domain.Workshop, error) {
-	list, err := s.repo.GetByOwnerID(ctx, ownerID)
+func (s *workshopService) GetMyWorkshops(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error) {
+	list, err := s.repo.GetByOwnerID(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
