@@ -114,6 +114,18 @@ func (m *mockAuthRepoAdapter) UpdatePassword(ctx context.Context, userID uuid.UU
 	}
 	return auth.ErrUserNotFound
 }
+func (m *mockAuthRepoAdapter) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	return false, nil
+}
+func (m *mockAuthRepoAdapter) GetWorkshopsByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error) {
+	return []domain.Workshop{}, nil
+}
+func (m *mockAuthRepoAdapter) GetWorkshopEmployeeMembership(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error) {
+	return nil, nil
+}
+func (m *mockAuthRepoAdapter) GetWorkshopByID(ctx context.Context, workshopID uuid.UUID) (*domain.Workshop, error) {
+	return nil, nil
+}
 
 func TestHandler_Workshop_NearbySearch(t *testing.T) {
 	app, repo, _ := setupTestAppWithWorkshop()

@@ -154,6 +154,28 @@ func (m *mockEmployeeRepo) CreateUser(ctx context.Context, user *domain.User) er
 	return nil
 }
 
+func (m *mockEmployeeRepo) IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error) {
+	norm := domain.NormalizePhone(phone)
+	for _, u := range m.usersByPhone {
+		if u.Role == domain.RoleOwner && domain.NormalizePhone(u.Phone) == norm {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *mockEmployeeRepo) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	norm := domain.NormalizePhone(phone)
+	for _, wsMap := range m.employees {
+		for _, e := range wsMap {
+			if domain.NormalizePhone(e.Phone) == norm {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
 func setupEmployeeService() (employee.Service, *mockEmployeeRepo) {
 	repo := newMockEmployeeRepo()
 	var buf bytes.Buffer

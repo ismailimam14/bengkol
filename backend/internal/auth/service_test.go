@@ -115,6 +115,22 @@ func (m *mockAuthRepo) UpdatePassword(ctx context.Context, userID uuid.UUID, new
 	return nil
 }
 
+func (m *mockAuthRepo) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	return false, nil
+}
+
+func (m *mockAuthRepo) GetWorkshopsByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error) {
+	return []domain.Workshop{}, nil
+}
+
+func (m *mockAuthRepo) GetWorkshopEmployeeMembership(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error) {
+	return nil, nil
+}
+
+func (m *mockAuthRepo) GetWorkshopByID(ctx context.Context, workshopID uuid.UUID) (*domain.Workshop, error) {
+	return nil, nil
+}
+
 func setupAuthService() (auth.Service, *mockAuthRepo, *security.JWTManager) {
 	repo := newMockAuthRepo()
 	jwtMgr := security.NewJWTManager("test-secret-key-at-least-32-chars-long", "test-refresh-secret", 15, 7)

@@ -3,6 +3,7 @@ package employee
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,6 +36,8 @@ type Repository interface {
 	FindUserByPhone(ctx context.Context, phone string) (*domain.User, error)
 	FindUserByEmail(ctx context.Context, email string) (*domain.User, error)
 	CreateUser(ctx context.Context, user *domain.User) error
+	IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error)
+	IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error)
 }
 
 type postgresRepository struct {
@@ -60,11 +63,20 @@ func (r *postgresRepository) GetWorkshopOwnerID(ctx context.Context, workshopID 
 }
 
 func (r *postgresRepository) Create(ctx context.Context, emp *domain.WorkshopEmployee) error {
+	var permsJSON []byte
+	if emp.Permissions != nil {
+		var err error
+		permsJSON, err = json.Marshal(emp.Permissions)
+		if err != nil {
+			return fmt.Errorf("failed to marshal employee permissions: %w", err)
+		}
+	}
+
 	query := `
 		INSERT INTO workshop_employees (
-			id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+			id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 		)
 	`
 	_, err := r.db.ExecContext(
@@ -80,6 +92,7 @@ func (r *postgresRepository) Create(ctx context.Context, emp *domain.WorkshopEmp
 		string(emp.Status),
 		emp.Specialization,
 		emp.Notes,
+		permsJSON,
 		emp.CreatedAt,
 		emp.UpdatedAt,
 	)
@@ -91,12 +104,13 @@ func (r *postgresRepository) Create(ctx context.Context, emp *domain.WorkshopEmp
 
 func (r *postgresRepository) GetByID(ctx context.Context, workshopID, employeeID uuid.UUID) (*domain.WorkshopEmployee, error) {
 	query := `
-		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		FROM workshop_employees
 		WHERE workshop_id = $1 AND id = $2
 	`
 	var emp domain.WorkshopEmployee
 	var email, specialization, notes sql.NullString
+	var permsJSON []byte
 	err := r.db.QueryRowContext(ctx, query, workshopID, employeeID).Scan(
 		&emp.ID,
 		&emp.WorkshopID,
@@ -108,6 +122,7 @@ func (r *postgresRepository) GetByID(ctx context.Context, workshopID, employeeID
 		&emp.Status,
 		&specialization,
 		&notes,
+		&permsJSON,
 		&emp.CreatedAt,
 		&emp.UpdatedAt,
 	)
@@ -126,6 +141,12 @@ func (r *postgresRepository) GetByID(ctx context.Context, workshopID, employeeID
 	if notes.Valid {
 		emp.Notes = notes.String
 	}
+	if len(permsJSON) > 0 {
+		var customPerms domain.EmployeePermissions
+		if err := json.Unmarshal(permsJSON, &customPerms); err == nil {
+			emp.Permissions = &customPerms
+		}
+	}
 	perms := emp.CalculatePermissions()
 	emp.Permissions = &perms
 	return &emp, nil
@@ -133,13 +154,14 @@ func (r *postgresRepository) GetByID(ctx context.Context, workshopID, employeeID
 
 func (r *postgresRepository) GetByUserID(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error) {
 	query := `
-		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		FROM workshop_employees
 		WHERE workshop_id = $1 AND user_id = $2
 		LIMIT 1
 	`
 	var emp domain.WorkshopEmployee
 	var email, specialization, notes sql.NullString
+	var permsJSON []byte
 	err := r.db.QueryRowContext(ctx, query, workshopID, userID).Scan(
 		&emp.ID,
 		&emp.WorkshopID,
@@ -151,6 +173,7 @@ func (r *postgresRepository) GetByUserID(ctx context.Context, workshopID, userID
 		&emp.Status,
 		&specialization,
 		&notes,
+		&permsJSON,
 		&emp.CreatedAt,
 		&emp.UpdatedAt,
 	)
@@ -168,6 +191,12 @@ func (r *postgresRepository) GetByUserID(ctx context.Context, workshopID, userID
 	}
 	if notes.Valid {
 		emp.Notes = notes.String
+	}
+	if len(permsJSON) > 0 {
+		var customPerms domain.EmployeePermissions
+		if err := json.Unmarshal(permsJSON, &customPerms); err == nil {
+			emp.Permissions = &customPerms
+		}
 	}
 	perms := emp.CalculatePermissions()
 	emp.Permissions = &perms
@@ -206,7 +235,7 @@ func (r *postgresRepository) List(ctx context.Context, workshopID uuid.UUID, pag
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		FROM workshop_employees
 		WHERE %s
 		ORDER BY created_at ASC
@@ -225,6 +254,7 @@ func (r *postgresRepository) List(ctx context.Context, workshopID uuid.UUID, pag
 	for rows.Next() {
 		var emp domain.WorkshopEmployee
 		var email, specialization, notes sql.NullString
+		var permsJSON []byte
 		if err := rows.Scan(
 			&emp.ID,
 			&emp.WorkshopID,
@@ -236,6 +266,7 @@ func (r *postgresRepository) List(ctx context.Context, workshopID uuid.UUID, pag
 			&emp.Status,
 			&specialization,
 			&notes,
+			&permsJSON,
 			&emp.CreatedAt,
 			&emp.UpdatedAt,
 		); err != nil {
@@ -250,6 +281,12 @@ func (r *postgresRepository) List(ctx context.Context, workshopID uuid.UUID, pag
 		if notes.Valid {
 			emp.Notes = notes.String
 		}
+		if len(permsJSON) > 0 {
+			var customPerms domain.EmployeePermissions
+			if err := json.Unmarshal(permsJSON, &customPerms); err == nil {
+				emp.Permissions = &customPerms
+			}
+		}
 		perms := emp.CalculatePermissions()
 		emp.Permissions = &perms
 		employees = append(employees, emp)
@@ -259,10 +296,19 @@ func (r *postgresRepository) List(ctx context.Context, workshopID uuid.UUID, pag
 }
 
 func (r *postgresRepository) Update(ctx context.Context, emp *domain.WorkshopEmployee) error {
+	var permsJSON []byte
+	if emp.Permissions != nil {
+		var err error
+		permsJSON, err = json.Marshal(emp.Permissions)
+		if err != nil {
+			return fmt.Errorf("failed to marshal employee permissions: %w", err)
+		}
+	}
+
 	query := `
 		UPDATE workshop_employees
-		SET user_id = $1, name = $2, email = $3, phone = $4, role = $5, status = $6, specialization = $7, notes = $8, updated_at = $9
-		WHERE workshop_id = $10 AND id = $11
+		SET user_id = $1, name = $2, email = $3, phone = $4, role = $5, status = $6, specialization = $7, notes = $8, permissions = $9, updated_at = $10
+		WHERE workshop_id = $11 AND id = $12
 	`
 	res, err := r.db.ExecContext(
 		ctx,
@@ -275,6 +321,7 @@ func (r *postgresRepository) Update(ctx context.Context, emp *domain.WorkshopEmp
 		string(emp.Status),
 		emp.Specialization,
 		emp.Notes,
+		permsJSON,
 		emp.UpdatedAt,
 		emp.WorkshopID,
 		emp.ID,
@@ -313,14 +360,15 @@ func (r *postgresRepository) FindUserByPhone(ctx context.Context, phone string) 
 	if trimmed == "" {
 		return nil, nil
 	}
+	norm := domain.NormalizePhone(trimmed)
 	query := `
 		SELECT id, COALESCE(email, ''), password_hash, name, phone, role, created_at, updated_at
 		FROM users
-		WHERE phone = $1
+		WHERE phone = $1 OR phone = $2
 		LIMIT 1
 	`
 	var u domain.User
-	err := r.db.QueryRowContext(ctx, query, trimmed).Scan(
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(
 		&u.ID,
 		&u.Email,
 		&u.PasswordHash,
@@ -397,3 +445,45 @@ func (r *postgresRepository) CreateUser(ctx context.Context, user *domain.User) 
 	return nil
 }
 
+func (r *postgresRepository) IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return false, nil
+	}
+	norm := domain.NormalizePhone(trimmed)
+
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM users u
+			WHERE (u.role = 'OWNER' OR EXISTS (SELECT 1 FROM workshops w WHERE w.owner_id = u.id))
+			  AND (u.phone = $1 OR u.phone = $2)
+		)
+	`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if phone is registered as owner: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *postgresRepository) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return false, nil
+	}
+	norm := domain.NormalizePhone(trimmed)
+
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM workshop_employees
+			WHERE phone = $1 OR phone = $2
+		)
+	`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if phone is registered as employee: %w", err)
+	}
+	return exists, nil
+}

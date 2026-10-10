@@ -3,6 +3,7 @@ package workshop
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -542,9 +543,9 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 	}
 	query := `
 		INSERT INTO workshop_employees (
-			id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+			id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 		)
 	`
 	for _, emp := range employees {
@@ -596,6 +597,11 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 			}
 		}
 
+		var permsJSON []byte
+		if emp.Permissions != nil {
+			permsJSON, _ = json.Marshal(emp.Permissions)
+		}
+
 		_, err := r.db.ExecContext(
 			ctx,
 			query,
@@ -609,6 +615,7 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 			string(status),
 			emp.Specialization,
 			emp.Notes,
+			permsJSON,
 			createdAt,
 			updatedAt,
 		)
@@ -621,7 +628,7 @@ func (r *postgresRepository) CreateEmployees(ctx context.Context, workshopID uui
 
 func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopEmployee, error) {
 	query := `
-		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, created_at, updated_at
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
 		FROM workshop_employees
 		WHERE workshop_id = $1
 		ORDER BY created_at ASC
@@ -636,6 +643,7 @@ func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.U
 	for rows.Next() {
 		var emp domain.WorkshopEmployee
 		var email, specialization, notes sql.NullString
+		var permsJSON []byte
 		if err := rows.Scan(
 			&emp.ID,
 			&emp.WorkshopID,
@@ -647,6 +655,7 @@ func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.U
 			&emp.Status,
 			&specialization,
 			&notes,
+			&permsJSON,
 			&emp.CreatedAt,
 			&emp.UpdatedAt,
 		); err != nil {
@@ -660,6 +669,12 @@ func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.U
 		}
 		if notes.Valid {
 			emp.Notes = notes.String
+		}
+		if len(permsJSON) > 0 {
+			var customPerms domain.EmployeePermissions
+			if err := json.Unmarshal(permsJSON, &customPerms); err == nil {
+				emp.Permissions = &customPerms
+			}
 		}
 		perms := emp.CalculatePermissions()
 		emp.Permissions = &perms

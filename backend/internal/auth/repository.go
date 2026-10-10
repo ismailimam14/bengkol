@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -29,6 +30,10 @@ type Repository interface {
 	RevokeRefreshToken(ctx context.Context, tokenHash string) error
 	RevokeAllUserRefreshTokens(ctx context.Context, userID uuid.UUID) error
 	UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error
+	IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error)
+	GetWorkshopsByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error)
+	GetWorkshopEmployeeMembership(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error)
+	GetWorkshopByID(ctx context.Context, workshopID uuid.UUID) (*domain.Workshop, error)
 }
 
 type postgresRepository struct {
@@ -105,14 +110,16 @@ func (r *postgresRepository) GetUserByPhone(ctx context.Context, phone string) (
 	if trimmed == "" {
 		return nil, ErrUserNotFound
 	}
+	norm := domain.NormalizePhone(trimmed)
 
 	query := `
 		SELECT id, COALESCE(email, ''), password_hash, name, phone, role, created_at, updated_at
 		FROM users
-		WHERE phone = $1
+		WHERE phone = $1 OR phone = $2
+		LIMIT 1
 	`
 	var u domain.User
-	err := r.db.QueryRowContext(ctx, query, trimmed).Scan(
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(
 		&u.ID,
 		&u.Email,
 		&u.PasswordHash,
@@ -250,3 +257,156 @@ func (r *postgresRepository) UpdatePassword(ctx context.Context, userID uuid.UUI
 	return nil
 }
 
+func (r *postgresRepository) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return false, nil
+	}
+	norm := domain.NormalizePhone(trimmed)
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM workshop_employees
+			WHERE phone = $1 OR phone = $2
+		)
+	`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if phone is employee: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *postgresRepository) GetWorkshopsByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Workshop, error) {
+	query := `
+		SELECT DISTINCT
+			w.id, w.owner_id, w.name, COALESCE(w.description, ''), w.address,
+			w.latitude, w.longitude, w.phone, w.photos, w.rating, w.review_count, w.status,
+			w.created_at, w.updated_at
+		FROM workshops w
+		LEFT JOIN workshop_employees we ON we.workshop_id = w.id AND we.user_id = $1 AND we.status = 'ACTIVE'
+		WHERE w.owner_id = $1 OR we.id IS NOT NULL
+		ORDER BY w.created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query workshops by user: %w", err)
+	}
+	defer rows.Close()
+
+	list := make([]domain.Workshop, 0)
+	for rows.Next() {
+		var w domain.Workshop
+		if err := rows.Scan(
+			&w.ID,
+			&w.OwnerID,
+			&w.Name,
+			&w.Description,
+			&w.Address,
+			&w.Latitude,
+			&w.Longitude,
+			&w.Phone,
+			&w.Photos,
+			&w.Rating,
+			&w.ReviewCount,
+			&w.Status,
+			&w.CreatedAt,
+			&w.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if w.Photos == nil {
+			w.Photos = []string{}
+		}
+		list = append(list, w)
+	}
+	return list, rows.Err()
+}
+
+func (r *postgresRepository) GetWorkshopEmployeeMembership(ctx context.Context, workshopID, userID uuid.UUID) (*domain.WorkshopEmployee, error) {
+	query := `
+		SELECT id, workshop_id, user_id, name, email, phone, role, status, specialization, notes, permissions, created_at, updated_at
+		FROM workshop_employees
+		WHERE workshop_id = $1 AND user_id = $2
+		LIMIT 1
+	`
+	var emp domain.WorkshopEmployee
+	var email, specialization, notes sql.NullString
+	var permsJSON []byte
+	err := r.db.QueryRowContext(ctx, query, workshopID, userID).Scan(
+		&emp.ID,
+		&emp.WorkshopID,
+		&emp.UserID,
+		&emp.Name,
+		&email,
+		&emp.Phone,
+		&emp.Role,
+		&emp.Status,
+		&specialization,
+		&notes,
+		&permsJSON,
+		&emp.CreatedAt,
+		&emp.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query workshop employee membership: %w", err)
+	}
+	if email.Valid {
+		emp.Email = email.String
+	}
+	if specialization.Valid {
+		emp.Specialization = specialization.String
+	}
+	if notes.Valid {
+		emp.Notes = notes.String
+	}
+	if len(permsJSON) > 0 {
+		var customPerms domain.EmployeePermissions
+		if err := json.Unmarshal(permsJSON, &customPerms); err == nil {
+			emp.Permissions = &customPerms
+		}
+	}
+	perms := emp.CalculatePermissions()
+	emp.Permissions = &perms
+	return &emp, nil
+}
+
+func (r *postgresRepository) GetWorkshopByID(ctx context.Context, workshopID uuid.UUID) (*domain.Workshop, error) {
+	query := `
+		SELECT id, owner_id, name, COALESCE(description, ''), address,
+			latitude, longitude, phone, photos, rating, review_count, status,
+			created_at, updated_at
+		FROM workshops
+		WHERE id = $1
+	`
+	var w domain.Workshop
+	err := r.db.QueryRowContext(ctx, query, workshopID).Scan(
+		&w.ID,
+		&w.OwnerID,
+		&w.Name,
+		&w.Description,
+		&w.Address,
+		&w.Latitude,
+		&w.Longitude,
+		&w.Phone,
+		&w.Photos,
+		&w.Rating,
+		&w.ReviewCount,
+		&w.Status,
+		&w.CreatedAt,
+		&w.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to query workshop: %w", err)
+	}
+	if w.Photos == nil {
+		w.Photos = []string{}
+	}
+	return &w, nil
+}
