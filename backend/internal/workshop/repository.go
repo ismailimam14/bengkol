@@ -141,21 +141,22 @@ func (r *postgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*domain
 
 func (r *postgresRepository) GetByOwnerID(ctx context.Context, ownerID uuid.UUID) ([]domain.Workshop, error) {
 	query := `
-		SELECT 
-			id, owner_id, name, description, address,
-			latitude, longitude, phone, photos, rating, review_count, status,
-			created_at, updated_at
-		FROM workshops
-		WHERE owner_id = $1
-		ORDER BY created_at DESC
+		SELECT DISTINCT
+			w.id, w.owner_id, w.name, w.description, w.address,
+			w.latitude, w.longitude, w.phone, w.photos, w.rating, w.review_count, w.status,
+			w.created_at, w.updated_at
+		FROM workshops w
+		LEFT JOIN workshop_employees we ON we.workshop_id = w.id AND we.user_id = $1 AND we.status = 'ACTIVE'
+		WHERE w.owner_id = $1 OR we.id IS NOT NULL
+		ORDER BY w.created_at DESC
 	`
 	rows, err := r.db.QueryContext(ctx, query, ownerID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query workshops by owner: %w", err)
+		return nil, fmt.Errorf("failed to query workshops by owner/employee: %w", err)
 	}
 	defer rows.Close()
 
-	var list []domain.Workshop
+	list := make([]domain.Workshop, 0)
 	for rows.Next() {
 		var w domain.Workshop
 		var desc sql.NullString
