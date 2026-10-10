@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	HeaderAppName    = "appName"
-	HeaderAppDevice  = "appDevice"
-	HeaderAppVersion = "appVersion"
+	HeaderAppName    = "app-name"
+	HeaderAppDevice  = "app-device"
+	HeaderAppVersion = "app-version"
 
 	HeaderXAppName    = "X-App-Name"
 	HeaderXAppDevice  = "X-App-Device"
@@ -61,9 +61,9 @@ func GetAppVersion(ctx context.Context) (string, bool) {
 func ValidateAppHeaders(strict bool) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rawAppName := getHeader(r.Header, HeaderAppName, HeaderXAppName, "app-name")
-			rawAppDevice := getHeader(r.Header, HeaderAppDevice, HeaderXAppDevice, "app-device")
-			rawAppVersion := getHeader(r.Header, HeaderAppVersion, HeaderXAppVersion, "app-version")
+			rawAppName := getHeader(r.Header, HeaderAppName, "appName", HeaderXAppName, "X-App-Name")
+			rawAppDevice := getHeader(r.Header, HeaderAppDevice, "appDevice", HeaderXAppDevice, "X-App-Device")
+			rawAppVersion := getHeader(r.Header, HeaderAppVersion, "appVersion", HeaderXAppVersion, "X-App-Version")
 
 			// Check if headers are completely omitted
 			if rawAppName == "" && rawAppDevice == "" && rawAppVersion == "" {
@@ -91,7 +91,8 @@ func ValidateAppHeaders(strict bool) func(next http.Handler) http.Handler {
 				} else if strings.EqualFold(rawAppName, AppNameBengkolAdmin) {
 					normalizedAppName = AppNameBengkolAdmin
 				} else {
-					valErrors["appName"] = "appName header is required and must be either 'bengkol' or 'bengkolAdmin'"
+					valErrors["app-name"] = "app-name header is required and must be either 'bengkol' or 'bengkolAdmin'"
+					valErrors["appName"] = valErrors["app-name"]
 				}
 			}
 
@@ -103,13 +104,15 @@ func ValidateAppHeaders(strict bool) func(next http.Handler) http.Handler {
 			case AppDeviceWeb:
 				normalizedAppDevice = AppDeviceWeb
 			default:
-				valErrors["appDevice"] = "appDevice header is required and must be either 'mobile app' or 'web'"
+				valErrors["app-device"] = "app-device header is required and must be either 'mobile app' or 'web'"
+				valErrors["appDevice"] = valErrors["app-device"]
 			}
 
 			// 3. Validate appVersion
 			normalizedAppVersion := strings.TrimSpace(rawAppVersion)
 			if normalizedAppVersion == "" {
-				valErrors["appVersion"] = "appVersion header is required (e.g. '1.0', '1.2', '2.0')"
+				valErrors["app-version"] = "app-version header is required (e.g. '1.0', '1.2', '2.0')"
+				valErrors["appVersion"] = valErrors["app-version"]
 			}
 
 			if len(valErrors) > 0 {

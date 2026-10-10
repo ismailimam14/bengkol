@@ -19,7 +19,29 @@ func TestValidateAppHeaders_Strict_Valid(t *testing.T) {
 		wantVersion string
 	}{
 		{
-			name: "bengkol customer app on mobile app",
+			name: "kebab-case: bengkol customer app on mobile app",
+			headers: map[string]string{
+				"app-name":    "bengkol",
+				"app-device":  "mobile app",
+				"app-version": "1.0",
+			},
+			wantName:    "bengkol",
+			wantDevice:  "mobile app",
+			wantVersion: "1.0",
+		},
+		{
+			name: "kebab-case: bengkolAdmin app on web",
+			headers: map[string]string{
+				"app-name":    "bengkolAdmin",
+				"app-device":  "web",
+				"app-version": "2.0.1",
+			},
+			wantName:    "bengkolAdmin",
+			wantDevice:  "web",
+			wantVersion: "2.0.1",
+		},
+		{
+			name: "legacy camelCase: bengkol customer app on mobile app",
 			headers: map[string]string{
 				"appName":    "bengkol",
 				"appDevice":  "mobile app",
@@ -30,7 +52,7 @@ func TestValidateAppHeaders_Strict_Valid(t *testing.T) {
 			wantVersion: "1.0",
 		},
 		{
-			name: "bengkolAdmin app on web",
+			name: "legacy camelCase: bengkolAdmin app on web",
 			headers: map[string]string{
 				"appName":    "bengkolAdmin",
 				"appDevice":  "web",
@@ -100,36 +122,45 @@ func TestValidateAppHeaders_Strict_Rejections(t *testing.T) {
 		wantFields []string
 	}{
 		{
-			name:       "missing all headers",
+			name:       "missing all headers (checks both kebab-case and camelCase keys)",
 			headers:    map[string]string{},
-			wantFields: []string{"appName", "appDevice", "appVersion"},
+			wantFields: []string{"app-name", "app-device", "app-version", "appName", "appDevice", "appVersion"},
 		},
 		{
-			name: "invalid appName",
+			name: "invalid app-name kebab-case",
+			headers: map[string]string{
+				"app-name":    "unknownApp",
+				"app-device":  "web",
+				"app-version": "1.0",
+			},
+			wantFields: []string{"app-name", "appName"},
+		},
+		{
+			name: "invalid appName camelCase",
 			headers: map[string]string{
 				"appName":    "unknownApp",
 				"appDevice":  "web",
 				"appVersion": "1.0",
 			},
-			wantFields: []string{"appName"},
+			wantFields: []string{"app-name", "appName"},
 		},
 		{
-			name: "invalid appDevice",
+			name: "invalid app-device",
 			headers: map[string]string{
-				"appName":    "bengkol",
-				"appDevice":  "smartTv",
-				"appVersion": "1.0",
+				"app-name":    "bengkol",
+				"app-device":  "smartTv",
+				"app-version": "1.0",
 			},
-			wantFields: []string{"appDevice"},
+			wantFields: []string{"app-device", "appDevice"},
 		},
 		{
-			name: "empty appVersion",
+			name: "empty app-version",
 			headers: map[string]string{
-				"appName":    "bengkol",
-				"appDevice":  "web",
-				"appVersion": "  ",
+				"app-name":    "bengkol",
+				"app-device":  "web",
+				"app-version": "  ",
 			},
-			wantFields: []string{"appVersion"},
+			wantFields: []string{"app-version", "appVersion"},
 		},
 	}
 

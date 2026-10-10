@@ -526,9 +526,9 @@ func TestHandler_Login_BengkolAdmin_NoWorkshops_Forbidden(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("appName", "bengkolAdmin")
-	req.Header.Set("appDevice", "web")
-	req.Header.Set("appVersion", "1.0")
+	req.Header.Set("app-name", "bengkolAdmin")
+	req.Header.Set("app-device", "web")
+	req.Header.Set("app-version", "1.0")
 	rec := httptest.NewRecorder()
 
 	app.ServeHTTP(rec, req)
@@ -568,9 +568,9 @@ func TestHandler_Login_BengkolAdmin_SingleWorkshop_AutoSelected(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("appName", "bengkolAdmin")
-	req.Header.Set("appDevice", "web")
-	req.Header.Set("appVersion", "1.0")
+	req.Header.Set("app-name", "bengkolAdmin")
+	req.Header.Set("app-device", "web")
+	req.Header.Set("app-version", "1.0")
 	rec := httptest.NewRecorder()
 
 	app.ServeHTTP(rec, req)
@@ -758,9 +758,9 @@ func TestHandler_GetMe_WithWorkshopContext(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	req.Header.Set("Authorization", "Bearer "+scopedTokens.AccessToken)
-	req.Header.Set("appName", "bengkolAdmin")
-	req.Header.Set("appDevice", "web")
-	req.Header.Set("appVersion", "1.0")
+	req.Header.Set("app-name", "bengkolAdmin")
+	req.Header.Set("app-device", "web")
+	req.Header.Set("app-version", "1.0")
 	rec := httptest.NewRecorder()
 
 	app.ServeHTTP(rec, req)

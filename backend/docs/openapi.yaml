@@ -89,9 +89,9 @@ paths:
     post:
       summary: Authenticate user
       description: |
-        Authenticates a user and returns a JWT token pair with workshop resolution based on the mandatory `appName` application header:
-        - `appName: bengkol`: Customer application login. Always returns role `CUSTOMER`, omits workshop details and permissions, and never reclassifies existing accounts in the database.
-        - `appName: bengkolAdmin`: Workshop administration application login.
+        Authenticates a user and returns a JWT token pair with workshop resolution based on the mandatory `app-name` application header:
+        - `app-name: bengkol`: Customer application login. Always returns role `CUSTOMER`, omits workshop details and permissions, and never reclassifies existing accounts in the database.
+        - `app-name: bengkolAdmin`: Workshop administration application login.
           - 0 workshops: Returns `403 Forbidden` with error code `NO_WORKSHOP_ACCESS`.
           - 1 workshop: Automatically selects workshop, issues a workshop-scoped token pair with active employee/owner role and 20-key permissions.
           - >1 workshops: Returns `requires_workshop_selection: true`, user's workshops list, and `selected_workshop_id: null`. The client must then call `POST /api/v1/auth/get-permissions` (or `/select-workshop`) with the chosen workshop ID.
@@ -2200,7 +2200,7 @@ components:
 
   parameters:
     AppNameHeader:
-      name: appName
+      name: app-name
       in: header
       required: true
       description: Application identifier ('bengkol' for customer app, 'bengkolAdmin' for workshop administration & employee app).
@@ -2211,7 +2211,7 @@ components:
           - bengkolAdmin
         example: bengkolAdmin
     AppDeviceHeader:
-      name: appDevice
+      name: app-device
       in: header
       required: true
       description: Client device type ('mobile app' or 'web').
@@ -2222,7 +2222,7 @@ components:
           - web
         example: mobile app
     AppVersionHeader:
-      name: appVersion
+      name: app-version
       in: header
       required: true
       description: Client application version (e.g. 1.0, 1.2, 2.0).
