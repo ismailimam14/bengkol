@@ -43,6 +43,7 @@ type RouterConfig struct {
 	DeviceHandler    *notification.Handler
 	WSHandler        *websocket.Handler
 	JWTManager       *security.JWTManager
+	StrictAppHeaders bool
 }
 
 // NewRouter constructs and configures the top-level Chi router.
@@ -86,6 +87,8 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 
 	// API v1 Sub-router
 	r.Route("/api/v1", func(v1 chi.Router) {
+		v1.Use(middleware.ValidateAppHeaders(cfg.StrictAppHeaders))
+
 		v1.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
 			response.Success(w, http.StatusOK, map[string]string{
 				"message": "Bengkol API v1 is operational",
