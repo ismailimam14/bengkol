@@ -3,6 +3,7 @@ package workshop_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"sort"
@@ -21,6 +22,7 @@ type mockWorkshopRepo struct {
 	operatingHours map[uuid.UUID][]domain.OperatingHour
 	photos         map[uuid.UUID]*domain.WorkshopPhoto
 	employees      map[uuid.UUID][]domain.WorkshopEmployee
+	ownerPhones    map[uuid.UUID]string
 }
 
 func newMockWorkshopRepo() *mockWorkshopRepo {
@@ -29,6 +31,7 @@ func newMockWorkshopRepo() *mockWorkshopRepo {
 		operatingHours: make(map[uuid.UUID][]domain.OperatingHour),
 		photos:         make(map[uuid.UUID]*domain.WorkshopPhoto),
 		employees:      make(map[uuid.UUID][]domain.WorkshopEmployee),
+		ownerPhones:    make(map[uuid.UUID]string),
 	}
 }
 
@@ -206,6 +209,35 @@ func (m *mockWorkshopRepo) GetEmployees(ctx context.Context, workshopID uuid.UUI
 		return []domain.WorkshopEmployee{}, nil
 	}
 	return emps, nil
+}
+
+func (m *mockWorkshopRepo) IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error) {
+	norm := domain.NormalizePhone(phone)
+	for _, p := range m.ownerPhones {
+		if domain.NormalizePhone(p) == norm {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (m *mockWorkshopRepo) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	norm := domain.NormalizePhone(phone)
+	for _, emps := range m.employees {
+		for _, e := range emps {
+			if domain.NormalizePhone(e.Phone) == norm {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func (m *mockWorkshopRepo) GetOwnerPhone(ctx context.Context, ownerID uuid.UUID) (string, error) {
+	if p, ok := m.ownerPhones[ownerID]; ok {
+		return p, nil
+	}
+	return "", nil
 }
 
 func setupWorkshopService() (workshop.Service, *mockWorkshopRepo) {
@@ -709,5 +741,209 @@ func TestService_GetMyWorkshops_OwnerAndEmployee(t *testing.T) {
 		t.Fatalf("expected 0 workshops for unrelated user, got %d", len(unrelatedList))
 	}
 }
+
+func TestWorkshopService_CreateWorkshop_PhoneSeparation(t *testing.T) {
+	svc, repo := setupWorkshopService()
+	ctx := context.Background()
+
+	ownerID := uuid.New()
+	ownerPhone := "081211110001"
+	repo.ownerPhones[ownerID] = ownerPhone
+
+	// 1. Owner's phone is already registered as an employee in another workshop -> rejected
+	otherWsID := uuid.New()
+	repo.employees[otherWsID] = []domain.WorkshopEmployee{
+		{
+			ID:    uuid.New(),
+			Phone: ownerPhone,
+			Role:  domain.EmployeeRoleMechanic,
+		},
+	}
+
+	req := workshop.CreateWorkshopRequest{
+		Name:      "Bengkel Jaya",
+		Address:   "Jl. Raya No. 1",
+		Phone:     "081299998888",
+		Latitude:  -6.2,
+		Longitude: 106.8,
+		Photos:    []string{"photo1.jpg", "photo2.jpg", "photo3.jpg"},
+	}
+
+	_, valErrors, err := svc.CreateWorkshop(ctx, ownerID, req)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed when owner phone is employee in another workshop, got %v", err)
+	}
+	if valErrors["phone"] == "" {
+		t.Errorf("expected phone validation error, got %v", valErrors)
+	}
+
+	// Clear employee record so owner phone is clean
+	repo.employees[otherWsID] = nil
+
+	// 2. Initial employee phone matches workshop owner's phone -> rejected
+	reqWithEmpSameAsOwner := req
+	reqWithEmpSameAsOwner.Employees = []workshop.CreateEmployeeInput{
+		{
+			Name:  "Montir Budi",
+			Phone: "+62 812 1111 0001", // normalized matches ownerPhone
+			Role:  domain.EmployeeRoleMechanic,
+		},
+	}
+	_, valErrors, err = svc.CreateWorkshop(ctx, ownerID, reqWithEmpSameAsOwner)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed when employee has owner phone, got %v", err)
+	}
+	if valErrors["employees[0].phone"] == "" {
+		t.Errorf("expected employees[0].phone validation error, got %v", valErrors)
+	}
+
+	// 3. Initial employee phone matches workshop phone -> rejected
+	reqWithEmpSameAsWs := req
+	reqWithEmpSameAsWs.Employees = []workshop.CreateEmployeeInput{
+		{
+			Name:  "Montir Budi",
+			Phone: "081299998888", // matches req.Phone
+			Role:  domain.EmployeeRoleMechanic,
+		},
+	}
+	_, valErrors, err = svc.CreateWorkshop(ctx, ownerID, reqWithEmpSameAsWs)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed when employee has workshop phone, got %v", err)
+	}
+	if valErrors["employees[0].phone"] == "" {
+		t.Errorf("expected employees[0].phone validation error, got %v", valErrors)
+	}
+
+	// 4. Duplicate employee phones in request -> rejected
+	reqWithDupEmps := req
+	reqWithDupEmps.Employees = []workshop.CreateEmployeeInput{
+		{
+			Name:  "Montir 1",
+			Phone: "081300001111",
+			Role:  domain.EmployeeRoleMechanic,
+		},
+		{
+			Name:  "Montir 2",
+			Phone: "+62 813 0000 1111", // duplicate
+			Role:  domain.EmployeeRoleMechanic,
+		},
+	}
+	_, valErrors, err = svc.CreateWorkshop(ctx, ownerID, reqWithDupEmps)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed on duplicate employee phones, got %v", err)
+	}
+	if valErrors["employees[1].phone"] == "" {
+		t.Errorf("expected duplicate employee phone error, got %v", valErrors)
+	}
+
+	// 5. Initial employee phone is registered as owner in any workshop -> rejected
+	otherOwnerID := uuid.New()
+	repo.ownerPhones[otherOwnerID] = "081512345678"
+	reqWithRegisteredOwnerEmp := req
+	reqWithRegisteredOwnerEmp.Employees = []workshop.CreateEmployeeInput{
+		{
+			Name:  "Montir Owner Elsewhere",
+			Phone: "081512345678",
+			Role:  domain.EmployeeRoleMechanic,
+		},
+	}
+	_, valErrors, err = svc.CreateWorkshop(ctx, ownerID, reqWithRegisteredOwnerEmp)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed when employee is registered owner, got %v", err)
+	}
+	if valErrors["employees[0].phone"] == "" {
+		t.Errorf("expected error for employee registered as owner, got %v", valErrors)
+	}
+}
+
+func TestWorkshopService_CreateWorkshop_InitialEmployeePermissions(t *testing.T) {
+	svc, repo := setupWorkshopService()
+	ctx := context.Background()
+
+	ownerID := uuid.New()
+	repo.ownerPhones[ownerID] = "081299990001"
+
+	// 1. JSON with unknown permission key for initial employee -> rejected
+	jsonBody := []byte(`{
+		"name": "Bengkel Modern",
+		"address": "Jl. Sudirman No. 10",
+		"phone": "081299990002",
+		"latitude": -6.2,
+		"longitude": 106.8,
+		"photos": ["p1.jpg", "p2.jpg", "p3.jpg"],
+		"employees": [
+			{
+				"name": "Admin Satu",
+				"phone": "081299990003",
+				"role": "ADMIN",
+				"permissions": {
+					"can_access_cashier": true,
+					"invalid_super_key": true
+				}
+			}
+		]
+	}`)
+	var req workshop.CreateWorkshopRequest
+	if err := json.Unmarshal(jsonBody, &req); err != nil {
+		t.Fatalf("failed to unmarshal request: %v", err)
+	}
+
+	_, valErrors, err := svc.CreateWorkshop(ctx, ownerID, req)
+	if !errors.Is(err, workshop.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for unknown permission key, got %v", err)
+	}
+	if valErrors["employees[0].permissions.invalid_super_key"] == "" {
+		t.Errorf("expected error for employees[0].permissions.invalid_super_key, got %v", valErrors)
+	}
+
+	// 2. Valid initial employees with custom permissions for ADMIN and default for MECHANIC -> success
+	validJsonBody := []byte(`{
+		"name": "Bengkel Modern",
+		"address": "Jl. Sudirman No. 10",
+		"phone": "081299990002",
+		"latitude": -6.2,
+		"longitude": 106.8,
+		"photos": ["p1.jpg", "p2.jpg", "p3.jpg"],
+		"employees": [
+			{
+				"name": "Admin Kasir",
+				"phone": "081299990003",
+				"role": "ADMIN",
+				"permissions": {
+					"can_access_cashier": true,
+					"can_manage_inventory": false
+				}
+			},
+			{
+				"name": "Montir Mesin",
+				"phone": "081299990004",
+				"role": "MECHANIC"
+			}
+		]
+	}`)
+	var validReq workshop.CreateWorkshopRequest
+	if err := json.Unmarshal(validJsonBody, &validReq); err != nil {
+		t.Fatalf("failed to unmarshal valid request: %v", err)
+	}
+
+	ws, valErrors, err := svc.CreateWorkshop(ctx, ownerID, validReq)
+	if err != nil {
+		t.Fatalf("unexpected error creating workshop: %v (valErrors: %v)", err, valErrors)
+	}
+	if len(ws.Employees) != 2 {
+		t.Fatalf("expected 2 employees saved, got %d", len(ws.Employees))
+	}
+
+	adminEmp := ws.Employees[0]
+	if adminEmp.Permissions == nil || !adminEmp.Permissions.CanAccessCashier || adminEmp.Permissions.CanManageInventory {
+		t.Errorf("expected custom permissions for admin employee, got %+v", adminEmp.Permissions)
+	}
+
+	mechEmp := ws.Employees[1]
+	if mechEmp.Permissions == nil || !mechEmp.Permissions.CanAccessRepairJobs || mechEmp.Permissions.CanManageInventory {
+		t.Errorf("expected default permissions for mechanic, got %+v", mechEmp.Permissions)
+	}
+}
+
 
 

@@ -2,6 +2,7 @@ package workshop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,13 +31,36 @@ type RawPhotoInput struct {
 
 // CreateEmployeeInput DTO for optionally adding employees when creating a workshop
 type CreateEmployeeInput struct {
-	UserID         *uuid.UUID          `json:"user_id,omitempty"`
-	Name           string              `json:"name"`
-	Email          string              `json:"email,omitempty"`
-	Phone          string              `json:"phone"`
-	Role           domain.EmployeeRole `json:"role"`
-	Specialization string              `json:"specialization,omitempty"`
-	Notes          string              `json:"notes,omitempty"`
+	UserID         *uuid.UUID                  `json:"user_id,omitempty"`
+	Name           string                      `json:"name"`
+	Email          string                      `json:"email,omitempty"`
+	Phone          string                      `json:"phone"`
+	Role           domain.EmployeeRole         `json:"role"`
+	Specialization string                      `json:"specialization,omitempty"`
+	Notes          string                      `json:"notes,omitempty"`
+	Permissions    *domain.EmployeePermissions `json:"permissions,omitempty"`
+	UnknownPerms   []string                    `json:"-"`
+}
+
+func (r *CreateEmployeeInput) UnmarshalJSON(data []byte) error {
+	type plain CreateEmployeeInput
+	var p plain
+	if err := json.Unmarshal(data, &p); err != nil {
+		return err
+	}
+	*r = CreateEmployeeInput(p)
+
+	var raw struct {
+		Permissions map[string]json.RawMessage `json:"permissions"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil && raw.Permissions != nil {
+		for k := range raw.Permissions {
+			if !domain.IsValidPermissionKey(k) {
+				r.UnknownPerms = append(r.UnknownPerms, k)
+			}
+		}
+	}
+	return nil
 }
 
 // CreateWorkshopRequest DTO
@@ -110,6 +134,15 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 	v.Required("address", req.Address)
 	v.Required("phone", req.Phone)
 
+	// Verify owner phone is not already registered as an employee in any workshop
+	ownerPhone, err := s.repo.GetOwnerPhone(ctx, ownerID)
+	if err == nil && ownerPhone != "" {
+		isEmp, err := s.repo.IsPhoneRegisteredAsEmployee(ctx, ownerPhone)
+		if err == nil && isEmp {
+			v.AddError("phone", "owner phone number is already registered as an employee in a workshop")
+		}
+	}
+
 	var validPhotos []string
 	for _, p := range req.Photos {
 		trimmed := strings.TrimSpace(p)
@@ -129,6 +162,7 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 		v.AddError("longitude", "longitude must be between -180 and 180 degrees")
 	}
 
+	seenPhones := make(map[string]bool)
 	var validEmployees []domain.WorkshopEmployee
 	for i, emp := range req.Employees {
 		empName := strings.TrimSpace(emp.Name)
@@ -138,6 +172,27 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 		}
 		if empPhone == "" {
 			v.AddError(fmt.Sprintf("employees[%d].phone", i), "employee phone is required")
+		}
+		for _, up := range emp.UnknownPerms {
+			v.AddError(fmt.Sprintf("employees[%d].permissions.%s", i, up), fmt.Sprintf("unknown or invalid permission key: %s", up))
+		}
+		normEmpPhone := domain.NormalizePhone(empPhone)
+		if normEmpPhone != "" {
+			if seenPhones[normEmpPhone] {
+				v.AddError(fmt.Sprintf("employees[%d].phone", i), "duplicate employee phone number in request")
+			}
+			seenPhones[normEmpPhone] = true
+
+			if ownerPhone != "" && normEmpPhone == domain.NormalizePhone(ownerPhone) {
+				v.AddError(fmt.Sprintf("employees[%d].phone", i), "employee cannot have the same phone number as the workshop owner")
+			}
+			if normEmpPhone == domain.NormalizePhone(req.Phone) {
+				v.AddError(fmt.Sprintf("employees[%d].phone", i), "employee cannot have the same phone number as the workshop phone")
+			}
+			isOwner, err := s.repo.IsPhoneRegisteredAsOwner(ctx, normEmpPhone)
+			if err == nil && isOwner {
+				v.AddError(fmt.Sprintf("employees[%d].phone", i), "employee phone number is already registered to a workshop owner")
+			}
 		}
 		normRole, ok := domain.NormalizeEmployeeRole(string(emp.Role))
 		if !ok {
@@ -151,6 +206,16 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 					initialPassword = genPass
 				}
 			}
+			var assignedPerms *domain.EmployeePermissions
+			if normRole == domain.EmployeeRoleOwner {
+				defOwnerPerms := domain.DefaultPermissionsForRole(domain.EmployeeRoleOwner)
+				assignedPerms = &defOwnerPerms
+			} else if emp.Permissions != nil {
+				assignedPerms = emp.Permissions
+			} else {
+				defPerms := domain.DefaultPermissionsForRole(normRole)
+				assignedPerms = &defPerms
+			}
 			we := domain.WorkshopEmployee{
 				ID:              uuid.New(),
 				UserID:          emp.UserID,
@@ -161,6 +226,7 @@ func (s *workshopService) CreateWorkshop(ctx context.Context, ownerID uuid.UUID,
 				Status:          domain.EmployeeStatusActive,
 				Specialization:  strings.TrimSpace(emp.Specialization),
 				Notes:           strings.TrimSpace(emp.Notes),
+				Permissions:     assignedPerms,
 				InitialPassword: initialPassword,
 			}
 			validEmployees = append(validEmployees, we)

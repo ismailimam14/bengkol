@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bengkol/backend/internal/domain"
@@ -49,6 +50,9 @@ type Repository interface {
 	DeletePhotosByWorkshopID(ctx context.Context, workshopID uuid.UUID) error
 	CreateEmployees(ctx context.Context, workshopID uuid.UUID, employees []domain.WorkshopEmployee) error
 	GetEmployees(ctx context.Context, workshopID uuid.UUID) ([]domain.WorkshopEmployee, error)
+	IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error)
+	IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error)
+	GetOwnerPhone(ctx context.Context, ownerID uuid.UUID) (string, error)
 }
 
 type postgresRepository struct {
@@ -681,5 +685,58 @@ func (r *postgresRepository) GetEmployees(ctx context.Context, workshopID uuid.U
 		employees = append(employees, emp)
 	}
 	return employees, rows.Err()
+}
+
+func (r *postgresRepository) IsPhoneRegisteredAsOwner(ctx context.Context, phone string) (bool, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return false, nil
+	}
+	norm := domain.NormalizePhone(trimmed)
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM users
+			WHERE (phone = $1 OR phone = $2) AND role = 'OWNER'
+		)
+	`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if phone is registered as owner: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *postgresRepository) IsPhoneRegisteredAsEmployee(ctx context.Context, phone string) (bool, error) {
+	trimmed := strings.TrimSpace(phone)
+	if trimmed == "" {
+		return false, nil
+	}
+	norm := domain.NormalizePhone(trimmed)
+	query := `
+		SELECT EXISTS (
+			SELECT 1 FROM workshop_employees
+			WHERE phone = $1 OR phone = $2
+		)
+	`
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, trimmed, norm).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check if phone is registered as employee: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *postgresRepository) GetOwnerPhone(ctx context.Context, ownerID uuid.UUID) (string, error) {
+	query := `SELECT phone FROM users WHERE id = $1 LIMIT 1`
+	var phone string
+	err := r.db.QueryRowContext(ctx, query, ownerID).Scan(&phone)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to get owner phone: %w", err)
+	}
+	return phone, nil
 }
 

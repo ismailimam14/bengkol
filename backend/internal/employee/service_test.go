@@ -3,6 +3,7 @@ package employee_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -395,3 +396,304 @@ func TestEmployeeService_GetCurrentEmployee(t *testing.T) {
 		t.Errorf("expected ErrEmployeeNotFound, got %v", err)
 	}
 }
+
+func TestEmployeeService_PhoneSeparation(t *testing.T) {
+	svc, repo := setupEmployeeService()
+	ctx := context.Background()
+
+	workshopID := uuid.New()
+	ownerUserID := uuid.New()
+	repo.workshopOwners[workshopID] = ownerUserID
+
+	// Register an existing owner user with phone 081299990001
+	ownerPhone := "081299990001"
+	repo.usersByPhone[ownerPhone] = &domain.User{
+		ID:    ownerUserID,
+		Phone: ownerPhone,
+		Role:  domain.RoleOwner,
+	}
+
+	// Another workshop owner with phone 081299990002
+	otherOwnerPhone := "081299990002"
+	repo.usersByPhone[otherOwnerPhone] = &domain.User{
+		ID:    uuid.New(),
+		Phone: otherOwnerPhone,
+		Role:  domain.RoleOwner,
+	}
+
+	// 1. Try to create employee with phone matching current workshop owner
+	reqSameAsOwner := employee.CreateEmployeeRequest{
+		Name:  "Employee Same As Owner",
+		Phone: ownerPhone,
+		Role:  "MECHANIC",
+	}
+	_, valErrors, err := svc.CreateEmployee(ctx, workshopID, ownerUserID, domain.RoleOwner, reqSameAsOwner)
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+	if valErrors["phone"] == "" {
+		t.Errorf("expected phone validation error for employee matching owner, got %v", valErrors)
+	}
+
+	// 2. Try to create employee with phone registered as owner in another workshop (+62 format)
+	reqOtherOwner := employee.CreateEmployeeRequest{
+		Name:  "Employee Other Owner",
+		Phone: "+62 812 9999 0002",
+		Role:  "MECHANIC",
+	}
+	_, valErrors, err = svc.CreateEmployee(ctx, workshopID, ownerUserID, domain.RoleOwner, reqOtherOwner)
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+	if valErrors["phone"] == "" {
+		t.Errorf("expected phone validation error for employee registered as owner, got %v", valErrors)
+	}
+
+	// 3. Create valid employee, then try to update phone to owner's phone
+	reqValid := employee.CreateEmployeeRequest{
+		Name:  "Valid Employee",
+		Phone: "081233334444",
+		Role:  "MECHANIC",
+	}
+	emp, _, err := svc.CreateEmployee(ctx, workshopID, ownerUserID, domain.RoleOwner, reqValid)
+	if err != nil {
+		t.Fatalf("failed to create valid employee: %v", err)
+	}
+
+	updatePhone := ownerPhone
+	_, valErrors, err = svc.UpdateEmployee(ctx, workshopID, emp.ID, ownerUserID, domain.RoleOwner, employee.UpdateEmployeeRequest{
+		Phone: &updatePhone,
+	})
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed on phone update, got %v", err)
+	}
+	if valErrors["phone"] == "" {
+		t.Errorf("expected phone error on update, got %v", valErrors)
+	}
+}
+
+func TestEmployeeService_CustomAdminPermissions(t *testing.T) {
+	svc, repo := setupEmployeeService()
+	ctx := context.Background()
+
+	workshopID := uuid.New()
+	ownerUserID := uuid.New()
+	repo.workshopOwners[workshopID] = ownerUserID
+
+	// Owner creates an ADMIN employee with custom granular permissions
+	customPerms := domain.EmployeePermissions{
+		CanAccessCashier:    true,
+		CanIssueRefunds:     true,
+		CanManageDiscounts:  true,
+		CanManageInventory:  false, // customized to false
+		CanManageCustomers:  true,
+	}
+	req := employee.CreateEmployeeRequest{
+		Name:        "Custom Admin",
+		Phone:       "08155555555",
+		Role:        "ADMIN",
+		Permissions: &customPerms,
+	}
+
+	emp, valErrors, err := svc.CreateEmployee(ctx, workshopID, ownerUserID, domain.RoleOwner, req)
+	if err != nil {
+		t.Fatalf("unexpected error creating custom admin: %v (valErrors: %v)", err, valErrors)
+	}
+
+	if emp.Role != domain.EmployeeRoleAdmin {
+		t.Errorf("expected role ADMIN, got %s", emp.Role)
+	}
+	if emp.Permissions == nil {
+		t.Fatalf("expected non-nil permissions")
+	}
+	if !emp.Permissions.CanAccessCashier || emp.Permissions.CanManageInventory {
+		t.Errorf("expected customized permissions: CanAccessCashier=true, CanManageInventory=false, got %+v", emp.Permissions)
+	}
+
+	// Owner updates custom permissions
+	updatedPerms := customPerms
+	updatedPerms.CanManageInventory = true
+	updated, _, err := svc.UpdateEmployee(ctx, workshopID, emp.ID, ownerUserID, domain.RoleOwner, employee.UpdateEmployeeRequest{
+		Permissions: &updatedPerms,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error updating permissions: %v", err)
+	}
+	if !updated.Permissions.CanManageInventory {
+		t.Errorf("expected CanManageInventory to be updated to true")
+	}
+}
+
+func TestEmployeeService_UnknownPermissionKeys(t *testing.T) {
+	svc, repo := setupEmployeeService()
+	ctx := context.Background()
+
+	workshopID := uuid.New()
+	ownerUserID := uuid.New()
+	repo.workshopOwners[workshopID] = ownerUserID
+
+	// 1. JSON unmarshal with unknown permission key for CreateEmployee
+	bodyCreate := []byte(`{
+		"name": "Test User",
+		"phone": "08166666666",
+		"role": "ADMIN",
+		"permissions": {
+			"can_access_cashier": true,
+			"can_fly": true
+		}
+	}`)
+	var reqCreate employee.CreateEmployeeRequest
+	if err := json.Unmarshal(bodyCreate, &reqCreate); err != nil {
+		t.Fatalf("unexpected JSON unmarshal error: %v", err)
+	}
+
+	_, valErrors, err := svc.CreateEmployee(ctx, workshopID, ownerUserID, domain.RoleOwner, reqCreate)
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for unknown permission key, got %v", err)
+	}
+	if valErrors["permissions.can_fly"] == "" {
+		t.Errorf("expected validation error for permissions.can_fly, got %v", valErrors)
+	}
+
+	// 2. JSON unmarshal with unknown permission key for UpdateEmployee
+	bodyUpdate := []byte(`{
+		"permissions": {
+			"can_access_cashier": true,
+			"super_admin_mode": true
+		}
+	}`)
+	var reqUpdate employee.UpdateEmployeeRequest
+	if err := json.Unmarshal(bodyUpdate, &reqUpdate); err != nil {
+		t.Fatalf("unexpected JSON unmarshal error: %v", err)
+	}
+
+	// Create valid employee first
+	validEmp, _, _ := svc.CreateEmployee(ctx, workshopID, ownerUserID, domain.RoleOwner, employee.CreateEmployeeRequest{
+		Name:  "Valid Admin",
+		Phone: "08177777777",
+		Role:  "ADMIN",
+	})
+
+	_, valErrors, err = svc.UpdateEmployee(ctx, workshopID, validEmp.ID, ownerUserID, domain.RoleOwner, reqUpdate)
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed for unknown permission key on update, got %v", err)
+	}
+	if valErrors["permissions.super_admin_mode"] == "" {
+		t.Errorf("expected validation error for permissions.super_admin_mode, got %v", valErrors)
+	}
+}
+
+func TestEmployeeService_AntiEscalation(t *testing.T) {
+	svc, repo := setupEmployeeService()
+	ctx := context.Background()
+
+	workshopID := uuid.New()
+	ownerUserID := uuid.New()
+	repo.workshopOwners[workshopID] = ownerUserID
+
+	// Setup Manager 1 without CanManageRolesAndPermissions
+	mgrUser1 := uuid.New()
+	mgrPerms1 := domain.DefaultPermissionsForRole(domain.EmployeeRoleManager)
+	mgrPerms1.CanManageRolesAndPermissions = false
+	mgrEmp1 := &domain.WorkshopEmployee{
+		ID:          uuid.New(),
+		WorkshopID:  workshopID,
+		UserID:      &mgrUser1,
+		Name:        "Manager Without Perms Mgmt",
+		Phone:       "08188888001",
+		Role:        domain.EmployeeRoleManager,
+		Status:      domain.EmployeeStatusActive,
+		Permissions: &mgrPerms1,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	_ = repo.Create(ctx, mgrEmp1)
+
+	// Manager 1 tries to set custom permissions on employee creation -> fails
+	perms := domain.DefaultPermissionsForRole(domain.EmployeeRoleAdmin)
+	req1 := employee.CreateEmployeeRequest{
+		Name:        "Test Employee",
+		Phone:       "08188888002",
+		Role:        "ADMIN",
+		Permissions: &perms,
+	}
+	_, valErrors, err := svc.CreateEmployee(ctx, workshopID, mgrUser1, domain.RoleCustomer, req1)
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed when manager lacks CanManageRolesAndPermissions, got %v", err)
+	}
+	if valErrors["permissions"] == "" {
+		t.Errorf("expected error on permissions, got %v", valErrors)
+	}
+
+	// Setup Manager 2 WITH CanManageRolesAndPermissions, but without CanTransferOwnership
+	mgrUser2 := uuid.New()
+	mgrPerms2 := domain.DefaultPermissionsForRole(domain.EmployeeRoleManager)
+	mgrPerms2.CanManageRolesAndPermissions = true
+	mgrPerms2.CanTransferOwnership = false
+	mgrEmp2 := &domain.WorkshopEmployee{
+		ID:          uuid.New(),
+		WorkshopID:  workshopID,
+		UserID:      &mgrUser2,
+		Name:        "Manager With Perms Mgmt",
+		Phone:       "08188888003",
+		Role:        domain.EmployeeRoleManager,
+		Status:      domain.EmployeeStatusActive,
+		Permissions: &mgrPerms2,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	_ = repo.Create(ctx, mgrEmp2)
+
+	// Manager 2 tries to grant CanTransferOwnership which exceeds their own authority -> fails
+	escalatedPerms := domain.DefaultPermissionsForRole(domain.EmployeeRoleAdmin)
+	escalatedPerms.CanTransferOwnership = true
+	req2 := employee.CreateEmployeeRequest{
+		Name:        "Escalated Employee",
+		Phone:       "08188888004",
+		Role:        "ADMIN",
+		Permissions: &escalatedPerms,
+	}
+	_, valErrors, err = svc.CreateEmployee(ctx, workshopID, mgrUser2, domain.RoleCustomer, req2)
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed on privilege escalation, got %v", err)
+	}
+	if valErrors["permissions.can_transfer_ownership"] == "" {
+		t.Errorf("expected error on permissions.can_transfer_ownership, got %v", valErrors)
+	}
+}
+
+func TestEmployeeService_OwnerPermissionImmutability(t *testing.T) {
+	svc, repo := setupEmployeeService()
+	ctx := context.Background()
+
+	workshopID := uuid.New()
+	ownerUserID := uuid.New()
+	repo.workshopOwners[workshopID] = ownerUserID
+
+	// Create Owner employee record
+	ownerEmp := &domain.WorkshopEmployee{
+		ID:         uuid.New(),
+		WorkshopID: workshopID,
+		UserID:     &ownerUserID,
+		Name:       "Owner Employee",
+		Phone:      "08199999001",
+		Role:       domain.EmployeeRoleOwner,
+		Status:     domain.EmployeeStatusActive,
+		CreatedAt:  time.Now(),
+		UpdatedAt:  time.Now(),
+	}
+	_ = repo.Create(ctx, ownerEmp)
+
+	// Attempt to customize or downgrade Owner permissions -> rejected
+	downgradedPerms := domain.DefaultPermissionsForRole(domain.EmployeeRoleMechanic)
+	_, valErrors, err := svc.UpdateEmployee(ctx, workshopID, ownerEmp.ID, ownerUserID, domain.RoleOwner, employee.UpdateEmployeeRequest{
+		Permissions: &downgradedPerms,
+	})
+	if !errors.Is(err, employee.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed when modifying owner permissions, got %v", err)
+	}
+	if valErrors["permissions"] == "" {
+		t.Errorf("expected validation error for immutable owner permissions, got %v", valErrors)
+	}
+}
+
